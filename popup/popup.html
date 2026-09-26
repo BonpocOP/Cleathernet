@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="utf-8">
+    <title>Yandex Games AdBlocker</title>
+    <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+    <header class="head">
+        <h1 class="head__title">Yandex Games AdBlocker</h1>
+        <label class="switch" title="Выключить всё расширение">
+            <input type="checkbox" id="enabled" class="switch__input">
+            <span class="switch__track"></span>
+        </label>
+    </header>
+
+    <a class="update" id="update" href="#" target="_blank" rel="noopener" hidden></a>
+
+    <p class="status" id="status">Загрузка…</p>
+
+    <ul class="options" id="options">
+        <li class="option">
+            <label class="option__label" for="sticky">
+                <span class="option__name">Баннер в игре</span>
+                <span class="option__hint">Sticky-баннер снизу + растягивание игры</span>
+            </label>
+            <label class="switch switch_small">
+                <input type="checkbox" id="sticky" class="switch__input">
+                <span class="switch__track"></span>
+            </label>
+        </li>
+        <li class="option">
+            <label class="option__label" for="fullscreen">
+                <span class="option__name">Полноэкранная</span>
+                <span class="option__hint">Реклама между уровнями пропускается</span>
+            </label>
+            <label class="switch switch_small">
+                <input type="checkbox" id="fullscreen" class="switch__input">
+                <span class="switch__track"></span>
+            </label>
+        </li>
+        <li class="option">
+            <label class="option__label" for="catalog">
+                <span class="option__name">Каталог игр</span>
+                <span class="option__hint">Рекламные карточки в списках</span>
+            </label>
+            <label class="switch switch_small">
+                <input type="checkbox" id="catalog" class="switch__input">
+                <span class="switch__track"></span>
+            </label>
+        </li>
+    </ul>
+
+    <ul class="options options_game" id="gameOptions" hidden>
+        <li class="option">
+            <label class="option__label" for="widthStretch">
+                <span class="option__name">Растягивать по ширине</span>
+                <span class="option__hint" id="gameHint">Только для этой игры</span>
+            </label>
+            <label class="switch switch_small">
+                <input type="checkbox" id="widthStretch" class="switch__input">
+                <span class="switch__track"></span>
+            </label>
+        </li>
+    </ul>
+
+    <div class="stats">
+        <div class="stats__cell">
+            <span class="stats__value" id="pageCount">0</span>
+            <span class="stats__caption">на странице</span>
+        </div>
+        <div class="stats__cell">
+            <span class="stats__value" id="totalCount">0</span>
+            <span class="stats__caption">всего</span>
+        </div>
+    </div>
+
+    <footer class="foot">
+        <button type="button" class="btn" id="reload">Перезагрузить страницу</button>
+    </footer>
+
+    <!-- Всё про отчёт — в одном свёрнутом разделе: пока он закрыт, попап
+         только сообщает и не мешает. -->
+    <details class="env">
+        <summary class="env__title">Сообщить о проблеме</summary>
+        <p class="env__hint">Что ещё включено в браузере? Попадёт в отчёт — так проще найти причину.</p>
+        <label class="env__item"><input type="checkbox" data-env="blocker"> Другой блокировщик рекламы</label>
+        <label class="env__item"><input type="checkbox" data-env="vpn"> VPN или прокси</label>
+        <label class="env__item"><input type="checkbox" data-env="translator"> Переводчик страниц</label>
+        <button type="button" class="btn btn_ghost btn_wide" id="report">Скопировать отчёт</button>
+    </details>
+
+    <script src="popup.js"></script>
+</body>
+</html>

@@ -1,0 +1,82 @@
+{
+  "manifest_version": 3,
+  "name": "Yandex Games AdBlocker",
+  "version": "1.8.0",
+  "description": "Убирает рекламу на Яндекс.Играх и растягивает игру на освободившееся место.",
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "permissions": [
+    "storage",
+    "alarms"
+  ],
+  "host_permissions": [
+    "*://yandex.ru/games/*",
+    "*://yandex.com/games/*",
+    "*://*.yandex.ru/games/*",
+    "*://games.s3.yandex.net/*",
+    "*://*.games.s3.yandex.net/*",
+    "*://*.cdn.games.yandex.net/*"
+  ],
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_title": "Yandex Games AdBlocker"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://yandex.ru/games/*",
+        "*://yandex.com/games/*",
+        "*://*.yandex.ru/games/*",
+        "*://games.s3.yandex.net/*",
+        "*://*.games.s3.yandex.net/*"
+      ],
+      "js": [
+        "src/bundle/content.js"
+      ],
+      "css": [
+        "src/blocker.css"
+      ],
+      "run_at": "document_start",
+      "all_frames": true
+    },
+    {
+      "matches": [
+        "*://*.cdn.games.yandex.net/*",
+        "*://games.s3.yandex.net/*",
+        "*://*.games.s3.yandex.net/*"
+      ],
+      "js": [
+        "src/frame.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": true
+    },
+    {
+      "matches": [
+        "*://*/*"
+      ],
+      "js": [
+        "src/sdk-hook.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": true,
+      "world": "MAIN",
+      "include_globs": [
+        "*sdk_origin=sdk.games.s3.yandex.net*",
+        "*games.s3.yandex.net%2Fsdk*",
+        "*games.s3.yandex.net/sdk*",
+        "*://*.cdn.games.yandex.net/*",
+        "*sdk=%2Fsdk%2F_%2F*",
+        "*sdk=/sdk/_/*",
+        "*://yandex.ru/games/*",
+        "*://yandex.com/games/*"
+      ]
+    }
+  ],
+  "background": {
+    "service_worker": "src/background.js"
+  }
+}

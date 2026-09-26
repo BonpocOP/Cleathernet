@@ -1,0 +1,135 @@
+/*
+ * Первая линия обороны: срабатывает до запуска content.js, поэтому рекламу
+ * не видно даже мгновение.
+ *
+ * Важно: здесь именно visibility, а не display. Блок остаётся в потоке, и
+ * content.js может измерить его высоту — без этой цифры нечем чинить
+ * геометрию контейнера, из-за которой после обычного адблока оставалось
+ * пустое поле. Сразу после замера скрипт ставит на узел инлайновый
+ * display: none и убирает блок из потока уже окончательно.
+ *
+ * Каждая группа правил выключается своим атрибутом на <html>, который ставит
+ * content.js. Так тумблеры в попапе возвращают страницу в исходный вид без
+ * перезагрузки, а до чтения настроек (атрибутов ещё нет) реклама скрыта.
+ */
+
+html:not([data-ygab="off"]):not([data-ygab-sticky="off"]) [class*="sticky-adv-banner"],
+html:not([data-ygab="off"]):not([data-ygab-sticky="off"]) [class*="yandex-sticky-adv"],
+html:not([data-ygab="off"]):not([data-ygab-sticky="off"]) [class*="adv-banner__"] {
+    visibility: hidden !important;
+    pointer-events: none !important;
+}
+
+/*
+ * Платформенная кнопка «Отключить рекламу» и её слот. Здесь display, а не
+ * visibility: измерять нечего, а пустая полоса 315x32 в правом верхнем углу
+ * не нужна.
+ */
+html:not([data-ygab="off"]):not([data-ygab-sticky="off"]) [data-testid="disable-adv-button-sticky"],
+html:not([data-ygab="off"]):not([data-ygab-sticky="off"]) [class*="disable-adv-button-sticky"],
+html:not([data-ygab="off"]):not([data-ygab-sticky="off"]) [class*="disableAdButtonContainer"],
+html:not([data-ygab="off"]):not([data-ygab-sticky="off"]) [class*="disableAdButtonSlot"] {
+    display: none !important;
+}
+
+/*
+ * Всплывашка «Обменяйте яны на отключение рекламы» — то же предложение, но
+ * отдельным попапом поверх игры. Зацепка `no-ads-popup__popup` стоит только на
+ * корне попапа; хешированный `popup-module__popup--*` не трогаем, он общий для
+ * всех диалогов платформы.
+ */
+html:not([data-ygab="off"]):not([data-ygab-sticky="off"]) [data-testid="no-ads-popup-popup"],
+html:not([data-ygab="off"]):not([data-ygab-sticky="off"]) [class*="no-ads-popup__popup"] {
+    display: none !important;
+}
+
+html:not([data-ygab="off"]):not([data-ygab-catalog="off"]) [id^="adfox_"],
+html:not([data-ygab="off"]):not([data-ygab-catalog="off"]) [id*="yandex_rtb"] {
+    visibility: hidden !important;
+    pointer-events: none !important;
+}
+
+/*
+ * Главное правило против пустого поля.
+ *
+ * Разметка Яндекса режет место под рекламу инлайн-стилем на обёртке фрейма:
+ * width: calc(99.99% - 315px) — боковой блок, height: calc(99.99% - 107px) —
+ * нижний sticky-баннер. Класс обёртки хешированный (wAxTIv38TmZAY), поэтому
+ * цепляемся структурно — за прямого родителя #game-frame.
+ *
+ * !important в таблице стилей перебивает инлайн-стиль, так что размер
+ * держится, даже когда скрипт страницы пересчитывает calc заново.
+ */
+/* Высота — всегда: место из-под нижнего баннера игре нужно отдать в любом
+   случае, на пропорции картинки это не влияет. */
+html:not([data-ygab="off"]):not([data-ygab-layout="off"]) div:has(> iframe#game-frame),
+html:not([data-ygab="off"]):not([data-ygab-layout="off"]) iframe#game-frame {
+    height: 100% !important;
+    max-height: 100% !important;
+}
+
+/*
+ * Ширина — отдельным правилом, потому что её игрок выключает для конкретной
+ * игры. Одни игры пересчитывают канвас по новому размеру и занимают место
+ * целиком, другие держат свои пропорции и оказываются в рамке не по центру.
+ * Со стороны страницы это не отличить: канвас лежит в кросс-доменном фрейме,
+ * его геометрию не измерить.
+ */
+html:not([data-ygab="off"]):not([data-ygab-layout="off"]):not([data-ygab-stretch="off"]) div:has(> iframe#game-frame),
+html:not([data-ygab="off"]):not([data-ygab-layout="off"]):not([data-ygab-stretch="off"]) iframe#game-frame {
+    width: 100% !important;
+    max-width: 100% !important;
+}
+
+/*
+ * Растягивание по ширине выключено: игра остаётся своей ширины, но место из-под
+ * убранной колонки делится поровну. Без этого игра прижимается влево, а справа
+ * висит пустая полоса в 315px.
+ *
+ * Это только первый заход. Авто-поля не работают, если страница позиционирует
+ * обёртку абсолютно или растягивает её как элемент флекса, — на практике так и
+ * оказалось. Поэтому основную работу делает centerGameShell() в content.js: он
+ * считает зазор и ставит его числом.
+ */
+html:not([data-ygab="off"]):not([data-ygab-layout="off"])[data-ygab-stretch="off"] div:has(> iframe#game-frame) {
+    margin-left: auto !important;
+    margin-right: auto !important;
+}
+
+/*
+ * Полноэкранный рекламный модал, который платформа показывает поверх игры.
+ *
+ * Здесь opacity, а не display: элемент должен остаться отрисованным, иначе
+ * рекламный плеер не досчитает показ и кнопка «Закрыть» никогда не станет
+ * активной — игра так и останется на паузе за блюром. content.js гасит модал
+ * этими же стилями и жмёт «Закрыть»; правило ниже нужно, чтобы реклама не
+ * успела мигнуть до срабатывания скрипта.
+ */
+/*
+ * :has(iframe) здесь обязателен. Платформа держит модал смонтированным и
+ * пустым между показами, и без этого условия правило гасило пустышку, а
+ * расширение показывало таймер там, где рекламы нет. Рекламный фрейм внутри —
+ * признак настоящего показа. Модал, возвращённый кнопкой «Показать рекламу»,
+ * исключён по data-ygab-revealed.
+ */
+html:not([data-ygab="off"]):not([data-ygab-fullscreen="off"]) .play-modal.adv-focusable:not([class*="rewarded"]):not([data-ygab-revealed]):has(iframe),
+html:not([data-ygab="off"]):not([data-ygab-rewarded="off"]) .play-modal.adv-focusable[class*="rewarded"]:not([data-ygab-revealed]):has(iframe) {
+    opacity: 0 !important;
+    pointer-events: none !important;
+}
+
+/*
+ * Интерстишл платформы с собственным промо Яндекса («Одно приложение вместо
+ * тысячи»). Класс `prowo-container` — через «w»: так его пишет сама платформа,
+ * чтобы слот не ловился на слово «promo» в фильтрах блокировщиков.
+ *
+ * Гасим тоже opacity, а не display: контейнер держит блюр и паузу игры, снять
+ * их платформа должна сама по клику на крестик — его жмёт content.js.
+ * :has() обязателен по той же причине, что и у рекламного модала: между
+ * показами контейнер висит смонтированным и пустым.
+ */
+html:not([data-ygab="off"]):not([data-ygab-fullscreen="off"]) [class*="prowo-container"]:not([data-ygab-revealed]):has([class*="promo-slide"]),
+html:not([data-ygab="off"]):not([data-ygab-fullscreen="off"]) [class*="promo-container_advType"]:not([data-ygab-revealed]):has([class*="promo-slide"]) {
+    opacity: 0 !important;
+    pointer-events: none !important;
+}
