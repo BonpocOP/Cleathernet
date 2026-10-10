@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Самопроверка Cleathernet</title>
+<link rel="stylesheet" href="../welcome/welcome.css">
+<link rel="stylesheet" href="selfcheck.css">
+</head>
+<body>
+<main class="page">
+    <header class="hero">
+        <img class="hero__icon" src="../icons/icon128.png" alt="" width="48" height="48">
+        <div>
+            <h1 class="hero__title">Самопроверка</h1>
+            <p class="hero__lead">Расширение само откроет сайты из списка по одному, посмотрит, что убрало и что осталось, и соберёт всё в один файл для разработчика.</p>
+        </div>
+    </header>
+
+    <section class="card">
+        <h2>Как это работает</h2>
+        <ol class="steps">
+            <li>Нажмите «Начать» — откроется отдельное окно, расширение будет по очереди открывать сайты (около 20 секунд на каждый). Это окно лучше не трогать.</li>
+            <li>Когда всё пройдёт, нажмите «Сохранить файл» и перешлите файл разработчику.</li>
+        </ol>
+        <p class="muted">В файл не попадает текст страниц и писем: только названия блоков на странице, их размеры и числа. Адреса — без подробностей (только сайт и первая часть пути).</p>
+    </section>
+
+    <section class="card">
+        <h2>Сайты</h2>
+        <p class="muted">По одному адресу в строке. Можно дописать свои — где реклама осталась или пропало нужное.</p>
+        <textarea id="urls" class="urls" rows="12" spellcheck="false"></textarea>
+        <div class="actions">
+            <button type="button" class="button button_primary" id="start">Начать</button>
+            <button type="button" class="button" id="save" disabled>Сохранить файл</button>
+        </div>
+        <ol class="progress" id="progress"></ol>
+    </section>
+
+    <p class="setup" id="status" role="status"></p>
+</main>
+<script type="module" src="selfcheck.js"></script>
+</body>
+</html>

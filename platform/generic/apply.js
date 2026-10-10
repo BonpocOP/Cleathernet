@@ -144,7 +144,7 @@ function collapse(el, decision = null, afterOther = false) {
     }
     // empty — спрятано как пустое место: решение условное, его снимает
     // содержимое, пришедшее позже (main.js, refilled).
-    collapsed.set(el, { selector: null, inline: null, empty: Boolean(decision && decision.reason === 'empty') });
+    collapsed.set(el, { selector: null, inline: null, empty: Boolean(decision && decision.reason === 'empty'), decision, afterOther });
     if (collapseLog.length < 50) {
         const r = el.getBoundingClientRect();
         collapseLog.push({

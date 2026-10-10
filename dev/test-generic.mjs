@@ -260,7 +260,7 @@ const yandexMapsStop = async ({ neighbor = false } = {}) => page('Примерн
 // письма — кнопки-значки с js-promo-id_… (подсказки интерфейса, не
 // реклама): без текста они выглядят пустыми, но малы для рекламного
 // места (порог приманок 100×50) — трогать их нельзя.
-const mailLetterLate = ({ late = true, neighbor = false } = {}) => page('Входящие — Почта Mail',
+const mailLetterLate = ({ late = true, neighbor = false, noAd = false } = {}) => page('Входящие — Почта Mail',
     `body{margin:0;font:14px Arial,sans-serif;color:#000;background:#eef0f3}
      .layout__main-frame{width:1100px;min-height:700px;margin:16px auto;background:#fff;border-radius:16px}
      .scrollable{height:700px;overflow:auto}
@@ -273,7 +273,7 @@ const mailLetterLate = ({ late = true, neighbor = false } = {}) => page('Вхо�
     (neighbor ? '.letter-list-item-adv{display:none !important}' : ''),
     `<div class="layout__resizer  js-promo-id_left-column-resizer layout__resizer_left" style="position:fixed;left:0;top:0;width:7px;height:100vh;background:#e4e6ea"></div>
      <div class="layout__main-frame"><div class="scrollable scrollable_content scrollable_styled scrollable_background-transparent scrollable_scroll-style_traditional scrollable_top-line-adv-2pane scrollable_top-line-adv-2pane_high-block"><div class="layout__content-column"><div class="layout__letter-content">
-       <div class="react-async"><div class="letter-list-item-adv letter-list-item-adv_rounded letter-list-item-adv_topline"><div class="letter-list-item-adv__container"><div class="letter-list-item-adv-placeholder"><div class="letter-list-item-adv-placeholder__string"></div></div><div class="letter-list-item-adv__adv-content"></div></div></div></div>
+       ${noAd ? '' : '<div class="react-async"><div class="letter-list-item-adv letter-list-item-adv_rounded letter-list-item-adv_topline"><div class="letter-list-item-adv__container"><div class="letter-list-item-adv-placeholder"><div class="letter-list-item-adv-placeholder__string"></div></div><div class="letter-list-item-adv__adv-content"></div></div></div></div>'}
      </div></div></div></div>
      <template id="letter">
        <div class="letter__head"><b class="letter__author">Магазин игр</b><span class="letter__date">1 января, 12:00</span>
@@ -514,11 +514,14 @@ const CASES = [
     { id: 'почта: пустая строка рекламы в списке писем', url: 'https://mail.example.ru/inbox/', html: mail('zero'), content: ['.letter', '.toolbar', '.pager'] },
     { id: 'почта: строка рекламы спрятана', url: 'https://mail.example.ru/inbox/hidden', html: mail('hidden'), content: ['.letter', '.toolbar', '.pager'] },
     { id: 'почта: рекламный скрипт внутри списка', url: 'https://mail.example.ru/inbox/script', html: mail('script'), content: ['.letter', '.toolbar', '.pager'] },
+    // report5 (вживую): заготовки рекламы в рамке нет вовсе — область письма
+    // пряталась по одному модификатору scrollable_top-line-adv-2pane.
+    { id: 'почта: письмо на месте, рекламы в рамке нет вовсе', url: 'https://e.mail.ru/inbox/0:3:0/', html: () => mailLetterLate({ late: false, noAd: true }), content: ['.letter-text', '.letter-link', '.letter__flag', '.layout__resizer'] },
     { id: 'почта: письмо уже на месте, область названа по рекламе сверху', url: 'https://e.mail.ru/inbox/0:2:0/', html: () => mailLetterLate({ late: false, neighbor: true }), content: ['.letter-text', '.letter-link', '.letter__flag', '.layout__resizer'] },
     { id: 'почта: письмо пришло после пустой рамки с заготовкой рекламы', url: 'https://e.mail.ru/inbox/0:1:0/', html: () => mailLetterLate(), slot: '.react-async', content: ['.letter-text', '.letter-link', '.letter__flag', '.layout__resizer'] },
     { id: 'kinogo: баннер под плеером (kng-rekl)', url: 'https://kinogo.online/serial.html', html: () => kinogo(), slot: 'div.kng-rekl', content: ['h1', 'video.player', '#description', '.comment'] },
     { id: 'kinogo: сосед спрятал баннер, осталась обёртка 200 px', url: 'https://kinogo.online/serial2.html', html: () => kinogo({ neighbor: true }), afterOther: true, slot: 'div.kng-rekl', content: ['h1', 'video.player', '#description', '.comment'] },
-    { id: 'VK: промо игры в правой колонке', url: 'https://vk.com/feed', html: vk, slot: 'div.apps_feedRightAppsBlock', content: ['.post', '.friends_block', '.groups_block'] },
+    { id: 'VK: промо игры в правой колонке', url: 'https://vk.com/feed', html: vk, slot: 'div.apps_feedRightAppsBlock', content: ['.post', '.friends_block', '.groups_block'] , todo: 'этап 6: самопродвижение — только имя и ссылки на свой сайт (R12: одного имени для видимого мало)' },
     { id: 'Яндекс.Поиск: «Промо» и «Реклама» в выдаче', url: 'https://yandex.ru/search/?text=%D1%8F%D0%BD%D0%B4%D0%B5%D0%BA%D1%81+%D0%B4%D0%B8%D1%81%D0%BA', html: yandexSearch,
         slot: '#search-result > li:has(.OrganicTitle-Link[href*="_sttc"])', content: ['#search-result > li:not(:has([href*="_sttc"]))'] },
     { id: 'Яндекс.Поиск: реклама пришла после загрузки', url: 'https://yandex.ru/search/?text=late', html: yandexLate,
@@ -739,8 +742,10 @@ try {
             const left = now.report && now.report.leftovers;
             const quote = left && left.items.find(item => item.kinds.includes('маркировка'));
             const footer = left && left.items.find(item => item.kinds.length === 1 && item.kinds[0] === 'метка');
-            check(`${c.id}: отчёт — цитата с маркировкой видна как остаток, «2 из 4, только маркировка»`,
-                left && left.likely === 1 && quote && quote.slot && quote.slot.total === 2 && quote.slot.decision === null && quote.slot.signals.join() === 'marking' && footer, left);
+            // Ссылка «Реклама» в подвале ведёт на свою страницу — это
+            // навигация, не метка рекламы (R12): в остатках её нет.
+            check(`${c.id}: отчёт — цитата с маркировкой видна как остаток, «2 из 4, только маркировка»; ссылка «Реклама» в подвале — не метка`,
+                left && left.likely === 1 && quote && quote.slot && quote.slot.total === 2 && quote.slot.decision === null && quote.slot.signals.join() === 'marking' && !footer, left);
             check(`${c.id}: в отчёте нет параметров адресов`, left && !JSON.stringify(left).includes('SECRETTOKEN'), left && left.items.map(item => item.html));
         }
         if (c.control) {

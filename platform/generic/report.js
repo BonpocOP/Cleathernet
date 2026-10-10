@@ -236,3 +236,85 @@ function reconReport() {
         shadowHosts
     };
 }
+
+/* ---------- самопроверка (platform/selfcheck) ---------- */
+
+// Для страницы «Самопроверка»: что мы спрятали и не задели ли нужное — без
+// текста страницы (почта, переписка): только имена, размеры и числа.
+// Главный текст — блок с наибольшей прозой (абзацы от 80 знаков), как в
+// режиме чтения; спрятанное нами считается видимым — иначе спрятанное
+// письмо не нашлось бы.
+const SELFCHECK_PROSE = 80;
+const SELFCHECK_AD_TEXT = /реклам|рекламодател|erid|спонсор|sponsor|партн[её]рск|advertis/i;
+
+function proseOf(root) {
+    let total = 0;
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        const parent = node.parentElement;
+        if (parent && !parent.closest('script, style, noscript, template')) {
+            total += node.nodeValue.trim().length;
+        }
+    }
+    return total;
+}
+
+function mainTextBlock() {
+    const prose = new Map();
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        const parent = node.parentElement;
+        if (!parent || node.nodeValue.trim().length < SELFCHECK_PROSE || parent.closest('script, style, noscript, template')) {
+            continue;
+        }
+        if (!parent.checkVisibility() && !insideCollapsed(parent)) {
+            continue;
+        }
+        const box = parent.parentElement || parent;
+        prose.set(box, (prose.get(box) || 0) + node.nodeValue.trim().length);
+    }
+    let main = null;
+    for (const [box, total] of prose) {
+        if (!main || total > prose.get(main)) {
+            main = box;
+        }
+    }
+    return main;
+}
+
+function selfCheckReport() {
+    const main = mainTextBlock();
+    const hidden = [];
+    for (const [el, entry] of collapsed) {
+        if (!el.isConnected || hidden.length >= 50) {
+            continue;
+        }
+        const r = el.getBoundingClientRect();
+        const d = entry.decision || {};
+        hidden.push({
+            reason: d.reason || null,
+            score: typeof d.total === 'number' ? d.total : null,
+            signals: d.signals || [],
+            afterOther: Boolean(entry.afterOther),
+            tag: el.localName,
+            name: [el.id ? '#' + el.id : '', typeof el.className === 'string' ? el.className : ''].join(' ').trim().slice(0, 120),
+            size: `${Math.round(r.width)}x${Math.round(r.height)}`,
+            text: proseOf(el),
+            main: Boolean(main && (el === main || el.contains(main))),
+            adLike: SELFCHECK_AD_TEXT.test(el.textContent || '') || Boolean(el.querySelector('iframe'))
+        });
+    }
+    const left = leftoversReport();
+    return {
+        active,
+        mainText: main ? proseOf(main) : 0,
+        hidden,
+        leftovers: {
+            count: left.count,
+            likely: left.likely,
+            items: left.items.map(item => ({ kinds: item.kinds, tag: item.tag, id: item.id, size: item.size, shadow: item.shadow, canvas: item.canvas, images: item.images.map(src => { try { return new URL(src, location.href).hostname; } catch { return ''; } }), slot: item.slot }))
+        },
+        recon: reconReport()
+    };
+}
+

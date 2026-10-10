@@ -326,6 +326,27 @@ try {
     }));
     check('настройки: «Включить» возвращает сайт', reEnabled.level === reEnabled.defaultLevel && !(reEnabled.offSites || []).includes('test.example') && reEnabled.empty, reEnabled);
     check('настройки без ошибок в консоли', settingsErrors.length === 0, settingsErrors);
+
+    // Самопроверка: сама открывает сайт, собирает, что спрятано, — без
+    // текста страницы и с укороченным адресом.
+    const SELF_URL = 'https://selfcheck.example/news/2026/secret-letter-id';
+    await context.route(SELF_URL, route => route.fulfill({ contentType: 'text/html; charset=utf-8', body: `<!doctype html><html lang="ru"><head><meta charset="utf-8"></head><body>
+        <h1>Новости</h1><p>СЕКРЕТНЫЙТЕКСТ письма, который не должен попасть в файл самопроверки, даже если его много и он длинный.</p>
+        <div class="ad-banner" style="width:300px;height:250px"><a href="https://ads.example/click"><img alt="" width="300" height="250" src="data:image/gif;base64,R0lGODlhAQABAIAAAP///wAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw=="></a><span>Реклама</span></div>
+        <p>Текст после рекламы.</p></body></html>` }));
+    const selfcheck = await context.newPage();
+    const selfErrors = [];
+    selfcheck.on('pageerror', error => selfErrors.push(String(error.message || error)));
+    await selfcheck.goto(`chrome-extension://${id}/ygab/platform/selfcheck/selfcheck.html?urls=${encodeURIComponent(SELF_URL)}&settle=1500`);
+    await selfcheck.click('#start');
+    await selfcheck.waitForFunction(() => document.body.dataset.done === '1', null, { timeout: 90000 }).catch(() => {});
+    const selfReport = await selfcheck.evaluate(() => window.__selfcheck());
+    const site = selfReport && selfReport.sites[0];
+    check('самопроверка: открыла сайт и собрала спрятанное, вопросов нет',
+        site && !site.error && site.hidden.length >= 1 && site.problems === 0 && site.hidden.every(h => typeof h.text === 'number' && typeof h.main === 'boolean'), site);
+    check('самопроверка: в файле нет текста страницы, адрес укорочен',
+        selfReport && !JSON.stringify(selfReport).includes('СЕКРЕТНЫЙТЕКСТ') && !JSON.stringify(selfReport).includes('secret-letter-id') && site && site.url === 'https://selfcheck.example/news/…', site && site.url);
+    check('самопроверка без ошибок в консоли', selfErrors.length === 0, selfErrors);
 } catch (error) {
     check('тест не упал', false, String(error.message || error).slice(0, 300));
 } finally {

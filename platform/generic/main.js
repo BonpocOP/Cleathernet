@@ -305,6 +305,10 @@ try {
     watchActive(location.hostname, update);
     // Для отчёта «Сообщить о проблеме»: что и почему схлопнуто здесь.
     chrome.runtime.onMessage.addListener((message, sender, respond) => {
+        if (message && message.action === 'getSelfCheck') {
+            respond(safely(selfCheckReport));
+            return;
+        }
         if (message && message.action === 'getGenericReport') {
             respond({
                 active,

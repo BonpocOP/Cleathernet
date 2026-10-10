@@ -7,6 +7,7 @@
 
 const MAX_LEVELS = 10;
 const EMPTY_MIN_SIDE = 20;
+const BIG_BLOCK_SHARE = 0.5;
 
 // Есть ли у блока видимое содержимое: текст, картинки, видео, фреймы — в
 // том числе в закрытом теневом DOM (снаружи такой блок пустой, но на
@@ -225,6 +226,50 @@ function hiddenAdTrace(root) {
     return false;
 }
 
+// Подтверждения имени, не зависящие от словаря сайта (R12).
+// Формат: размер стандартного рекламного места (IAB и российские) — у самого
+// блока или у его картинки, фрейма, видео. Допуск — на рамку и отступы.
+const AD_SIZES = [
+    [300, 250], [336, 280], [728, 90], [970, 90], [970, 250], [160, 600], [120, 600],
+    [300, 600], [240, 400], [320, 50], [320, 100], [468, 60], [250, 250], [200, 200],
+    [300, 50], [1000, 120], [1000, 90], [240, 350], [300, 300], [580, 400]
+];
+const AD_SIZE_TOLERANCE = 6;
+
+const isAdSize = r => AD_SIZES.some(([w, h]) => Math.abs(r.width - w) <= AD_SIZE_TOLERANCE && Math.abs(r.height - h) <= AD_SIZE_TOLERANCE);
+
+function adFormat(root) {
+    if (isAdSize(root.getBoundingClientRect())) {
+        return true;
+    }
+    for (const media of root.querySelectorAll('img, iframe, video, canvas, ins')) {
+        if (isAdSize(media.getBoundingClientRect())) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Ссылка наружу: реклама ведёт к рекламодателю — на другой сайт; меню,
+// подвал, карточки сайта ведут на свой. Ссылок немного (одно действие), и
+// чужих — не меньше половины.
+const LEADS_AWAY_MAX_LINKS = 6;
+
+function leadsAway(root) {
+    const links = [...root.querySelectorAll('a[href]')].filter(a => /^https?:/i.test(a.href));
+    if (!links.length || links.length > LEADS_AWAY_MAX_LINKS) {
+        return false;
+    }
+    const away = links.filter(a => {
+        try {
+            return !sameSite(new URL(a.href).hostname, location.hostname);
+        } catch {
+            return false;
+        }
+    });
+    return away.length * 2 >= links.length;
+}
+
 // Решение по слоту: сначала предохранители, потом оценка признаков
 // (score.js). Возвращает { reason, total, signals } или null. Причины:
 //   empty   — пустое место с рекламным следом (реклама не пришла или её
@@ -255,5 +300,21 @@ function verdict(root) {
     }
     // Пустое место — по любому следу, видимый блок — только по видимым
     // (signs.js, «видимость следа»).
-    return decide(evidence(root, !empty), empty);
+    const decision = decide(evidence(root, !empty), empty);
+    // Видимый блок по одному имени — только с подтверждением (R12): имя —
+    // словарь сайта, «ad» в нём значит и рекламу, и раскладку вокруг неё
+    // (gazeta.ru ad_branding_footer — подвал, mail.ru …top-line-adv… — письмо).
+    if (decision && !empty && decision.signals.every(signal => signal.startsWith('name:')) && !adFormat(root) && !leadsAway(root)) {
+        return null;
+    }
+    // Страховка: блок больше половины экрана по одному имени не прячем —
+    // нужен второй признак. Главную область страницы рекламой по одному
+    // слову не объявляем (mail.ru, 10.10: область письма 1640×834).
+    if (decision && !empty && decision.reason === 'name' && decision.signals.length === 1) {
+        const r = root.getBoundingClientRect();
+        if (r.width * r.height > innerWidth * innerHeight * BIG_BLOCK_SHARE) {
+            return null;
+        }
+    }
+    return decision;
 }

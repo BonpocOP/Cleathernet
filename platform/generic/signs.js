@@ -40,8 +40,54 @@ const NAME_HINT = /ad|rtb|sponsor|commercial|rekl|promo/i;
 const words = value => value.replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase().split(/[^a-z0-9]+/);
 
 // Сила имени узла: 2 — рекламное слово, 1 — слабое, 0 — ничего.
+// Модификатор блока (БЭМ: «блок_модификатор», «блок--модификатор», где
+// «блок» — тоже класс этого узла) описывает состояние блока, а не что он
+// такое. Реклама помечается модификатором-«рекламой» (serp-item_type_ad,
+// post--ad, card_is_sponsored); составной модификатор, где рекламное слово —
+// одно из нескольких, — это контекст: у области письма mail.ru
+// scrollable_top-line-adv-2pane — «вариант раскладки с полосой рекламы
+// сверху» (10.10: пряталась вся область с письмом).
+const MODIFIER_IDENTITY = new Set(['type', 'is', 'kind', 'view', 'mode', 'variant', 'format']);
+
+function modifierOf(token, tokens) {
+    let base = '';
+    for (const other of tokens) {
+        if (other !== token && other.length > base.length && (token.startsWith(other + '_') || token.startsWith(other + '--'))) {
+            base = other;
+        }
+    }
+    return base ? token.slice(base.length).replace(/^_|^--/, '') : null;
+}
+
+function classStrength(className) {
+    const tokens = className.split(/\s+/).filter(Boolean);
+    let best = 0;
+    for (const token of tokens) {
+        if (!NAME_HINT.test(token)) {
+            continue;
+        }
+        const modifier = modifierOf(token, tokens);
+        const list = words(modifier === null ? token : modifier);
+        if (list.some(word => AD_WORDS.has(word))) {
+            if (modifier === null || list.every(word => AD_WORDS.has(word) || MODIFIER_IDENTITY.has(word))) {
+                return 2;
+            }
+            continue;
+        }
+        if (list.some(word => WEAK_WORDS.has(word))) {
+            best = 1;
+        }
+    }
+    return best;
+}
+
 function nameStrength(el, withData = false) {
-    const values = [typeof el.className === 'string' ? el.className : el.getAttribute('class') || '', el.id || ''];
+    const className = typeof el.className === 'string' ? el.className : el.getAttribute('class') || '';
+    let best = className && NAME_HINT.test(className) ? classStrength(className) : 0;
+    if (best === 2) {
+        return 2;
+    }
+    const values = [el.id || ''];
     if (withData) {
         for (const attr of el.attributes) {
             if (attr.name.startsWith('data-') && attr.value.length < 80) {
@@ -49,7 +95,6 @@ function nameStrength(el, withData = false) {
             }
         }
     }
-    let best = 0;
     for (const value of values) {
         if (!value || !NAME_HINT.test(value)) {
             continue;
@@ -285,6 +330,27 @@ function atTextEdge(root, el) {
     return index === 0 || (index !== -1 && owners.slice(index).every(owner => owner === el || el.contains(owner)));
 }
 
+// Один и тот же сайт: kp.ru и www.kp.ru, news.site.ru и site.ru.
+const sameSite = (a, b) => {
+    a = a.replace(/^www\./, '');
+    b = b.replace(/^www\./, '');
+    return a === b || a.endsWith('.' + b) || b.endsWith('.' + a);
+};
+
+// Ссылка «Реклама» на свою же страницу («Реклама на сайте», «Рекламодателям»
+// в подвале или меню) — навигация, а не метка рекламы (10.10, набор обычных
+// страниц: так прятались подвал gazeta.ru и колонка vc.ru, а пункт меню,
+// который сайт прячет сам, делал «сиротой» всё меню kp.ru). У меток рекламы
+// в образцах ссылки нет или она ведёт наружу.
+const ownPageLink = el => {
+    const link = el.closest('a[href]');
+    try {
+        return Boolean(link) && sameSite(new URL(link.href, location.href).hostname, location.hostname);
+    } catch {
+        return false;
+    }
+};
+
 // Элементы-метки внутри узла: текст элемента целиком — метка (или
 // маркировка одной строкой, начинающаяся с метки).
 function labelsIn(root, visibleOnly = false) {
@@ -299,7 +365,7 @@ function labelsIn(root, visibleOnly = false) {
         const label = value.length <= 40
             ? isLabelText(value) && isLabelText(el.textContent)
             : isMarkingLabel(value);
-        if (label && (!visibleOnly || seen(el))) {
+        if (label && !ownPageLink(el) && (!visibleOnly || seen(el))) {
             out.push(el);
         }
     }
@@ -318,18 +384,9 @@ function labelsIn(root, visibleOnly = false) {
 const ORPHAN_LEVELS = 10;
 const ORPHAN_HIDDEN_MEDIA = 'img, video, canvas, iframe, picture, object, embed';
 
-// Ссылка на свою же страницу («Реклама на сайте» в подвале или меню) — не
-// рекламная метка, её сайт прячет сам (узкий экран, выпадающее меню).
-const ownPageLink = el => {
-    const link = el.closest('a[href]');
-    try {
-        return Boolean(link) && new URL(link.href, location.href).hostname === location.hostname;
-    } catch {
-        return false;
-    }
-};
 // Спрятанное — только значок: метка и украшения («· 0+», «•••»).
 const ORPHAN_EXTRA = 8;
+const ORPHAN_MAX_LINKS = 3;
 // Короткий текст без картинок — полоска у подписи, а не сама реклама
 // (тот же порог, что у labelOnly в slots.js).
 const ORPHAN_STRIP_TEXT = 30;
@@ -350,6 +407,11 @@ function orphanUnit(label) {
         // сосед спрятал маркировку под ней) — сама реклама выше.
         if (text.length <= ORPHAN_STRIP_TEXT && ![...node.querySelectorAll(ORPHAN_HIDDEN_MEDIA)].some(sizable)) {
             continue;
+        }
+        // Реклама — одно действие (ссылка-две или кнопка); меню, подвал,
+        // список ссылок — не сирота, даже если в нём спрятан пункт «Реклама».
+        if (node.closest('nav, header, footer, [role="navigation"], [role="menu"]') || node.querySelectorAll('a[href]').length > ORPHAN_MAX_LINKS) {
+            return null;
         }
         // node — блок с содержимым; спрятанная часть — только значок.
         const extra = (hidden.textContent || '').replace(/\s+/g, ' ').trim().length - (label.textContent || '').replace(/\s+/g, ' ').trim().length;
