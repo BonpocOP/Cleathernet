@@ -181,6 +181,33 @@ function namesIn(root, visibleOnly = false) {
     return out;
 }
 
+// Контейнер, названный по рекламе, которую он содержит, — не реклама:
+// mail.ru, 10.10 — прокручиваемая область письма с модификатором
+// scrollable_top-line-adv-2pane («сверху полоса рекламы») держит письмо, а
+// сама реклама — узел letter-list-item-adv внутри, в десятки раз меньше.
+// У настоящей рекламной обёртки рекламный узел внутри с неё размером.
+// Спрятанный (движком, соседом, нами) рекламный узел тоже в счёт: область
+// письма проверяется раньше заготовки рекламы внутри неё, а заготовку к
+// тому времени уже прячет движок.
+const AD_NAME_NODES = ['ad', 'rtb', 'sponsor', 'commercial', 'rekl']
+    .flatMap(w => [`[class*="${w}" i]`, `[id*="${w}" i]`]).join(', ');
+const SMALLER_AD_SHARE = 0.5;
+
+function holdsSmallerAd(outer) {
+    const box = outer.getBoundingClientRect();
+    const area = box.width * box.height;
+    for (const el of outer.querySelectorAll(AD_NAME_NODES)) {
+        if (nameStrength(el) !== 2) {
+            continue;
+        }
+        const r = el.getBoundingClientRect();
+        if (r.width * r.height < area * SMALLER_AD_SHARE || insideCollapsed(el)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 /* ---------- закрытый теневой DOM ---------- */
 
 // Страница может спрятать содержимое в закрытый shadow root — скрипты
@@ -535,7 +562,7 @@ function evidence(root, visibleOnly) {
         tracking: trackingIn(root),
         name: nameLevel({
             strong: names.strong > 0,
-            cover: Boolean(names.strong && names.outer && covering(names.outer)),
+            cover: Boolean(names.strong && names.outer && covering(names.outer) && !holdsSmallerAd(names.outer)),
             weak: names.weak,
             rootWeak: names.weak >= 2 && nameStrength(root, true) === 1
         })
@@ -585,6 +612,7 @@ function decide(ev, empty) {
 // важно, кто спрятал рекламу внутри слота — мы, движок или сосед.
 
 const MAX_LEVELS = 10;
+const EMPTY_MIN_SIDE = 20;
 
 // Есть ли у блока видимое содержимое: текст, картинки, видео, фреймы — в
 // том числе в закрытом теневом DOM (снаружи такой блок пустой, но на
@@ -817,6 +845,15 @@ function verdict(root) {
     const empty = !visibleContent(root);
     if (!safeToCollapse(root, empty)) {
         return null;
+    }
+    // Пустая полоса тоньше 20 px — ручка, разделитель, отступ, не место
+    // под рекламу (mail.ru, 10.10: ручка ширины колонки 7×886 с
+    // js-promo-id_… в имени).
+    if (empty) {
+        const r = root.getBoundingClientRect();
+        if (Math.min(r.width, r.height) < EMPTY_MIN_SIDE) {
+            return null;
+        }
     }
     // Одну подпись без рекламы не прячем никогда (R11).
     if (!empty && labelOnly(root)) {

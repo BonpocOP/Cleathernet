@@ -75,7 +75,7 @@ function evidence(root, visibleOnly) {
         tracking: trackingIn(root),
         name: nameLevel({
             strong: names.strong > 0,
-            cover: Boolean(names.strong && names.outer && covering(names.outer)),
+            cover: Boolean(names.strong && names.outer && covering(names.outer) && !holdsSmallerAd(names.outer)),
             weak: names.weak,
             rootWeak: names.weak >= 2 && nameStrength(root, true) === 1
         })

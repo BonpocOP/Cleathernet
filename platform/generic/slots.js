@@ -6,6 +6,7 @@
 // важно, кто спрятал рекламу внутри слота — мы, движок или сосед.
 
 const MAX_LEVELS = 10;
+const EMPTY_MIN_SIDE = 20;
 
 // Есть ли у блока видимое содержимое: текст, картинки, видео, фреймы — в
 // том числе в закрытом теневом DOM (снаружи такой блок пустой, но на
@@ -238,6 +239,15 @@ function verdict(root) {
     const empty = !visibleContent(root);
     if (!safeToCollapse(root, empty)) {
         return null;
+    }
+    // Пустая полоса тоньше 20 px — ручка, разделитель, отступ, не место
+    // под рекламу (mail.ru, 10.10: ручка ширины колонки 7×886 с
+    // js-promo-id_… в имени).
+    if (empty) {
+        const r = root.getBoundingClientRect();
+        if (Math.min(r.width, r.height) < EMPTY_MIN_SIDE) {
+            return null;
+        }
     }
     // Одну подпись без рекламы не прячем никогда (R11).
     if (!empty && labelOnly(root)) {

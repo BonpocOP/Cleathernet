@@ -252,23 +252,29 @@ const yandexMapsStop = async ({ neighbor = false } = {}) => page('Примерн
      </div><div class="map" title="карта — фон с градиентом, как картинка: не пустое место"></div>`);
 
 // Почта mail.ru, открытое письмо (10.10; классы — как в разметке почты,
-// текст, дата и адреса выдуманы). Сначала в
+// текст, дата и адреса выдуманы). Прокручиваемая область письма названа по
+// рекламе сверху (scrollable_top-line-adv-2pane) — это контейнер, а не
+// реклама; ручка ширины колонки 7 px с js-promo-id_… — не место рекламы. Сначала в
 // рамке письма только заготовка под рекламу (пустая, место держит),
 // письмо приходит через секунду — так почта собирает страницу. В шапке
 // письма — кнопки-значки с js-promo-id_… (подсказки интерфейса, не
 // реклама): без текста они выглядят пустыми, но малы для рекламного
 // места (порог приманок 100×50) — трогать их нельзя.
-const mailLetterLate = () => page('Входящие — Почта Mail',
+const mailLetterLate = ({ late = true, neighbor = false } = {}) => page('Входящие — Почта Mail',
     `body{margin:0;font:14px Arial,sans-serif;color:#000;background:#eef0f3}
      .layout__main-frame{width:1100px;min-height:700px;margin:16px auto;background:#fff;border-radius:16px}
+     .scrollable{height:700px;overflow:auto}
      .letter-list-item-adv{height:96px;margin:12px;border-radius:12px;background:#f0f1f3}
      .letter__head{display:flex;gap:12px;align-items:center;padding:16px}
      .letter__flag{display:inline-block}
      .letter__flag .button2{display:inline-block;padding:6px}
-     .letter-body{padding:16px 24px;min-height:300px}`,
-    `<div class="layout__main-frame"><div class="layout__content-column"><div class="layout__letter-content">
+     .letter-body{padding:16px 24px;min-height:300px}` +
+    // Движок (RU AdList) прячет саму заготовку рекламы, как вживую.
+    (neighbor ? '.letter-list-item-adv{display:none !important}' : ''),
+    `<div class="layout__resizer  js-promo-id_left-column-resizer layout__resizer_left" style="position:fixed;left:0;top:0;width:7px;height:100vh;background:#e4e6ea"></div>
+     <div class="layout__main-frame"><div class="scrollable scrollable_content scrollable_styled scrollable_background-transparent scrollable_scroll-style_traditional scrollable_top-line-adv-2pane scrollable_top-line-adv-2pane_high-block"><div class="layout__content-column"><div class="layout__letter-content">
        <div class="react-async"><div class="letter-list-item-adv letter-list-item-adv_rounded letter-list-item-adv_topline"><div class="letter-list-item-adv__container"><div class="letter-list-item-adv-placeholder"><div class="letter-list-item-adv-placeholder__string"></div></div><div class="letter-list-item-adv__adv-content"></div></div></div></div>
-     </div></div></div>
+     </div></div></div></div>
      <template id="letter">
        <div class="letter__head"><b class="letter__author">Магазин игр</b><span class="letter__date">1 января, 12:00</span>
          <div class="letter__flag  js-promo-id_letter-head-share-button" data-promo-id="letter-head-share-button"><span class="button2 button2_has-ico" title="Скопировать ссылку"><svg width="20" height="20" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8"/></svg></span></div>
@@ -276,7 +282,7 @@ const mailLetterLate = () => page('Входящие — Почта Mail',
        </div>
        <div class="letter__body"><div class="letter-body"><p class="letter-text">Продавец товара написал сообщение. У вас появились новые сообщения в чате с продавцом по заказу 12345678.</p><a class="letter-link" href="https://shop.example/order/1">Перейти к заказу</a></div></div>
      </template>
-     <script>setTimeout(() => document.querySelector('.layout__letter-content').append(document.getElementById('letter').content.cloneNode(true)), 1000);</script>`);
+     <script>setTimeout(() => document.querySelector('.layout__letter-content').append(document.getElementById('letter').content.cloneNode(true)), ${late ? 1000 : 0});</script>`);
 
 // Нативная реклама на обычном сайте (синтетический образец, этап 4):
 // карточка в ленте новостей с меткой «Реклама» и маркировкой по закону —
@@ -508,7 +514,8 @@ const CASES = [
     { id: 'почта: пустая строка рекламы в списке писем', url: 'https://mail.example.ru/inbox/', html: mail('zero'), content: ['.letter', '.toolbar', '.pager'] },
     { id: 'почта: строка рекламы спрятана', url: 'https://mail.example.ru/inbox/hidden', html: mail('hidden'), content: ['.letter', '.toolbar', '.pager'] },
     { id: 'почта: рекламный скрипт внутри списка', url: 'https://mail.example.ru/inbox/script', html: mail('script'), content: ['.letter', '.toolbar', '.pager'] },
-    { id: 'почта: письмо пришло после пустой рамки с заготовкой рекламы', url: 'https://e.mail.ru/inbox/0:1:0/', html: mailLetterLate, slot: '.react-async', content: ['.letter-text', '.letter-link', '.letter__flag'] },
+    { id: 'почта: письмо уже на месте, область названа по рекламе сверху', url: 'https://e.mail.ru/inbox/0:2:0/', html: () => mailLetterLate({ late: false, neighbor: true }), content: ['.letter-text', '.letter-link', '.letter__flag', '.layout__resizer'] },
+    { id: 'почта: письмо пришло после пустой рамки с заготовкой рекламы', url: 'https://e.mail.ru/inbox/0:1:0/', html: () => mailLetterLate(), slot: '.react-async', content: ['.letter-text', '.letter-link', '.letter__flag', '.layout__resizer'] },
     { id: 'kinogo: баннер под плеером (kng-rekl)', url: 'https://kinogo.online/serial.html', html: () => kinogo(), slot: 'div.kng-rekl', content: ['h1', 'video.player', '#description', '.comment'] },
     { id: 'kinogo: сосед спрятал баннер, осталась обёртка 200 px', url: 'https://kinogo.online/serial2.html', html: () => kinogo({ neighbor: true }), afterOther: true, slot: 'div.kng-rekl', content: ['h1', 'video.player', '#description', '.comment'] },
     { id: 'VK: промо игры в правой колонке', url: 'https://vk.com/feed', html: vk, slot: 'div.apps_feedRightAppsBlock', content: ['.post', '.friends_block', '.groups_block'] },

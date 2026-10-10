@@ -97,6 +97,33 @@ function namesIn(root, visibleOnly = false) {
     return out;
 }
 
+// Контейнер, названный по рекламе, которую он содержит, — не реклама:
+// mail.ru, 10.10 — прокручиваемая область письма с модификатором
+// scrollable_top-line-adv-2pane («сверху полоса рекламы») держит письмо, а
+// сама реклама — узел letter-list-item-adv внутри, в десятки раз меньше.
+// У настоящей рекламной обёртки рекламный узел внутри с неё размером.
+// Спрятанный (движком, соседом, нами) рекламный узел тоже в счёт: область
+// письма проверяется раньше заготовки рекламы внутри неё, а заготовку к
+// тому времени уже прячет движок.
+const AD_NAME_NODES = ['ad', 'rtb', 'sponsor', 'commercial', 'rekl']
+    .flatMap(w => [`[class*="${w}" i]`, `[id*="${w}" i]`]).join(', ');
+const SMALLER_AD_SHARE = 0.5;
+
+function holdsSmallerAd(outer) {
+    const box = outer.getBoundingClientRect();
+    const area = box.width * box.height;
+    for (const el of outer.querySelectorAll(AD_NAME_NODES)) {
+        if (nameStrength(el) !== 2) {
+            continue;
+        }
+        const r = el.getBoundingClientRect();
+        if (r.width * r.height < area * SMALLER_AD_SHARE || insideCollapsed(el)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 /* ---------- закрытый теневой DOM ---------- */
 
 // Страница может спрятать содержимое в закрытый shadow root — скрипты

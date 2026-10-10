@@ -22,7 +22,7 @@ chrome.runtime.onMessage.addListener((request, sender) => {
 
 /* ---------- проверка новой версии ---------- */
 
-const RELEASES_URL = 'https://api.github.com/repos/BonpocOP/YandexAdBlocker/releases/latest';
+const RELEASES_URL = 'https://api.github.com/repos/BonpocOP/Cleathernet/releases/latest';
 const UPDATE_ALARM = 'ygab:update-check';
 const DAY_MINUTES = 24 * 60;
 
