@@ -1,10 +1,10 @@
 # Cleathernet
 
 <p align="center">
-  <a href="https://github.com/BonpocOP/YandexAdBlocker/releases/latest/download/cleathernet.zip"><img alt="Скачать последнюю версию" src="https://img.shields.io/badge/%D0%A1%D0%BA%D0%B0%D1%87%D0%B0%D1%82%D1%8C-%D0%BF%D0%BE%D1%81%D0%BB%D0%B5%D0%B4%D0%BD%D1%8E%D1%8E%20%D0%B2%D0%B5%D1%80%D1%81%D0%B8%D1%8E-2ea44f?style=for-the-badge&logo=googlechrome&logoColor=white"></a>
+  <a href="https://github.com/BonpocOP/Cleathernet/releases/latest/download/cleathernet.zip"><img alt="Скачать последнюю версию" src="https://img.shields.io/badge/%D0%A1%D0%BA%D0%B0%D1%87%D0%B0%D1%82%D1%8C-%D0%BF%D0%BE%D1%81%D0%BB%D0%B5%D0%B4%D0%BD%D1%8E%D1%8E%20%D0%B2%D0%B5%D1%80%D1%81%D0%B8%D1%8E-2ea44f?style=for-the-badge&logo=googlechrome&logoColor=white"></a>
   <a href="#установка"><img alt="Как установить" src="https://img.shields.io/badge/%D0%9A%D0%B0%D0%BA-%D1%83%D1%81%D1%82%D0%B0%D0%BD%D0%BE%D0%B2%D0%B8%D1%82%D1%8C-0969da?style=for-the-badge"></a>
   <br>
-  <a href="https://github.com/BonpocOP/YandexAdBlocker/releases/latest"><img alt="Версия" src="https://img.shields.io/github/v/release/BonpocOP/YandexAdBlocker?label=%D0%B2%D0%B5%D1%80%D1%81%D0%B8%D1%8F"></a>
+  <a href="https://github.com/BonpocOP/Cleathernet/releases/latest"><img alt="Версия" src="https://img.shields.io/github/v/release/BonpocOP/Cleathernet?label=%D0%B2%D0%B5%D1%80%D1%81%D0%B8%D1%8F"></a>
 </p>
 
 Блокировщик рекламы для Chrome (Manifest V3), который **просто работает**:
@@ -41,7 +41,7 @@
 
 ### Chrome
 
-1. **Скачайте архив:** [cleathernet.zip](https://github.com/BonpocOP/YandexAdBlocker/releases/latest/download/cleathernet.zip).
+1. **Скачайте архив:** [cleathernet.zip](https://github.com/BonpocOP/Cleathernet/releases/latest/download/cleathernet.zip).
 2. **Распакуйте его в постоянную папку**, например `Документы\Cleathernet`.
    Не удаляйте эту папку потом: расширение работает прямо из неё.
 3. Откройте в адресной строке `chrome://extensions`.
@@ -70,7 +70,7 @@
 
 Когда выходит новая версия, в меню расширения появляется ссылка на неё.
 
-1. Скачайте новый архив по той же [ссылке](https://github.com/BonpocOP/YandexAdBlocker/releases/latest/download/cleathernet.zip).
+1. Скачайте новый архив по той же [ссылке](https://github.com/BonpocOP/Cleathernet/releases/latest/download/cleathernet.zip).
 2. Распакуйте его **в ту же папку**, заменив файлы.
 3. На странице расширений нажмите на карточке кнопку обновления ↻.
 
@@ -83,7 +83,7 @@
   его на этом сайте. Значок станет серым.
 - **Реклама осталась.** В меню расширения → **«Сообщить о проблеме»** →
   **«Скопировать отчёт»** и пришлите его в
-  [Issues](https://github.com/BonpocOP/YandexAdBlocker/issues). В отчёте —
+  [Issues](https://github.com/BonpocOP/Cleathernet/issues). В отчёте —
   адрес страницы, настройки расширения и, на Яндекс.Играх, разметка страницы
   игры; ни логинов, ни истории.
 - **Браузер предлагает отключить расширения в режиме разработчика.** Закройте
@@ -630,6 +630,14 @@ Cleathernet собирается из двух частей: движка uBO Li
 `dev/ubol-contract.mjs` и сверяется при каждой сборке; раз в неделю GitHub
 проверяет новую версию движка и присылает pull request, если тесты зелёные.
 
+Наши модули — папки `platform/<имя>/` со своим `module.json` (какие
+скрипты на каких страницах): сборка находит их сама. Флажки страницы
+настроек — из каталога `platform/features.json`; сборка сверяет его с
+движком и с шагами настройки по умолчанию (`platform/setup.js`). «Где
+расширение работает» (выключенные сайты, общий выключатель) — одно место,
+`platform/shared/site-state.js`. Слой Яндекс.Игр живёт отдельно, в
+корне, и описан корневым `manifest.json`.
+
 Код для страницы пишется в `src/content/*.js`, а в расширение попадает
 собранным в один файл `src/bundle/content.js` внутри замыкания — чтобы ни
 одно наше имя не было общим с чужими скриптами того же изолированного мира.
@@ -649,6 +657,21 @@ node test-matrix.mjs        # рядом с uBO Lite, AdBlock, ABP, AdGuard, Gho
 Chrome не загружает расширения из командной строки) и распакованные соседи
 в `dev/.neighbors/<имя>`. Обе папки в `.gitignore`. Тесты не ходят на
 Яндекс: страницы и SDK подставляются локально.
+
+Вспомогательные скрипты `dev/` (в тесты не входят):
+
+```
+npm run install:local       # свежая сборка — в Desktop\Cleathernet-test (с отметкой сборки)
+node capture.mjs            # снять образцы страниц из test/corpus.json (MHTML, HAR, скриншот)
+node snapshot-to-html.mjs   # снимок MHTML → HTML для тестов на сборке
+node inspect-snapshot.mjs   # разобрать снимок: кто держит место под рекламу
+node render-icons.mjs       # иконки из platform/icons/*.svg в PNG
+node perf-generic.mjs       # цена общего механизма на тяжёлых страницах
+node perf-rulesets.mjs      # ускоряют ли страницы дополнительные наборы движка
+perf-ru.bat                 # то же с российского IP: двойной щелчок при включённом VPN
+node perf-baseline.mjs      # сколько процессорного времени тратит слой Игр
+node ubol-latest.mjs        # закрепить последнюю версию uBO Lite в vendor/ubol.json
+```
 
 ## Лицензия
 

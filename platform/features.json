@@ -1,0 +1,25 @@
+{
+  "about": "Каталог функций Cleathernet: что показывают настройки (platform/settings) и как это включается. type: ruleset — набор правил движка uBO Lite (ruleset — его номер). default — включено ли у нового пользователя; включённое по умолчанию включает шаг настройки platform/setup.js (dev/test-build.mjs сверяет, что каталог и шаги совпадают). network — функция сама обращается к внешнему серверу (вписать, какому): у наборов движка таких нет.",
+  "sections": [
+    {
+      "id": "annoyances",
+      "title": "Что убирать, кроме рекламы",
+      "features": [
+        { "id": "annoyances-cookies", "type": "ruleset", "ruleset": "annoyances-cookies", "title": "Уведомления о cookie", "hint": "Плашки и окна «Мы используем файлы cookie» внизу и поверх страницы.", "default": true },
+        { "id": "annoyances-overlays", "type": "ruleset", "ruleset": "annoyances-overlays", "title": "Окна поверх страницы", "hint": "«Подпишитесь на рассылку», опросы, затемнение страницы и запрет прокрутки, пока окно не закрыто.", "default": true },
+        { "id": "annoyances-notifications", "type": "ruleset", "ruleset": "annoyances-notifications", "title": "Просьбы включить уведомления", "hint": "Окна «Разрешите присылать уведомления» и скрипты сервисов push-рассылок. Ничего не теряется: уведомления нужного сайта можно разрешить в настройках браузера.", "default": true },
+        { "id": "annoyances-social", "type": "ruleset", "ruleset": "annoyances-social", "title": "Кнопки соцсетей", "hint": "«Поделиться», «Мы в соцсетях», счётчики лайков. Минус: может пропасть встроенный в статью пост из соцсети.", "default": false },
+        { "id": "annoyances-widgets", "type": "ruleset", "ruleset": "annoyances-widgets", "title": "Чаты поддержки", "hint": "Кнопки онлайн-консультантов в углу страницы (чаты WhatsApp, Webim и другие). Минус: на сайте банка или магазина пропадёт чат поддержки — если он нужен, выключите расширение на этом сайте.", "default": false },
+        { "id": "annoyances-ai", "type": "ruleset", "ruleset": "annoyances-ai", "title": "ИИ-помощники", "hint": "Встроенные в сайты чат-боты с ИИ. Пока в списке около десяти, в основном иностранных сайтов.", "default": true },
+        { "id": "annoyances-others", "type": "ruleset", "ruleset": "annoyances-others", "title": "Прочие помехи", "hint": "Окна «Подождите, не уходите!», подпись «Источник: …», которую сайт добавляет к скопированному тексту, проверка «вы в режиме инкогнито». Правила написаны под отдельные сайты; на редком сайте может пропасть мелочь, которая нужна.", "default": false }
+      ]
+    },
+    {
+      "id": "regional",
+      "title": "Списки для русскоязычных сайтов",
+      "features": [
+        { "id": "rus-0", "type": "ruleset", "ruleset": "rus-0", "title": "RU AdList", "hint": "Главный список рекламы для сайтов на русском, украинском, белорусском и казахском. Без него реклама на Авито, Яндексе и других русских сайтах почти не убирается.", "default": true }
+      ]
+    }
+  ]
+}

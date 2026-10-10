@@ -7,8 +7,10 @@
 //   node test-detectors.mjs                   только наше расширение
 //   node test-detectors.mjs --neighbor ubol   плюс сосед из dev/.neighbors/<имя>
 //   node test-detectors.mjs --only-neighbor ubol   только сосед, без нас (для сравнения)
+//   node test-detectors.mjs --ext ../build/extension   сборка Cleathernet вместо расширения для игр
 
 import { chromium } from 'playwright';
+import { browserOptions } from './browser.mjs';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
@@ -21,6 +23,8 @@ const argv = process.argv.slice(2);
 const opt = name => { const i = argv.indexOf(name); return i === -1 ? null : argv[i + 1]; };
 const neighbor = opt('--neighbor') || opt('--only-neighbor');
 const withUs = !argv.includes('--only-neighbor');
+// Сборка Cleathernet: слой игр внутри неё, рядом движок uBO Lite.
+const ext = opt('--ext') ? path.resolve(opt('--ext')) : null;
 
 const DETECTORS = fs.readFileSync(path.join(DEV, 'detectors.js'), 'utf8');
 const TOP_URL = 'https://yandex.ru/games/app/3';
@@ -33,12 +37,12 @@ const FRAME_HTML = `<!doctype html><html><head><meta charset="utf-8"></head><bod
 const SDK_JS = 'class Adv { showRewardedVideo() { return Promise.resolve(); } } window.YaGames = { init() { return Promise.resolve({ adv: new Adv() }); } };';
 
 const extensions = [];
-if (withUs) extensions.push(ROOT);
+if (withUs) extensions.push(ext || ROOT);
 if (neighbor) extensions.push(path.join(DEV, '.neighbors', neighbor));
 
 const profile = await fsp.mkdtemp(path.join(os.tmpdir(), 'ygab-detect-'));
 const context = await chromium.launchPersistentContext(profile, {
-    executablePath: path.join(DEV, '.browsers', 'chrome-win64', 'chrome.exe'),
+    ...browserOptions(),
     headless: true,
     args: ['--lang=ru', ...(extensions.length ? ['--disable-extensions-except=' + extensions.join(','), '--load-extension=' + extensions.join(',')] : [])]
 });
@@ -55,8 +59,9 @@ try {
         if (url.startsWith('https://an.yandex.ru/')) return route.fulfill({ contentType: 'text/javascript', body: '/* ad */' });
         return route.abort();
     });
-    // Соседу нужно время, чтобы зарегистрировать правила.
-    await new Promise(resolve => setTimeout(resolve, neighbor ? 4000 : 1000));
+    // Соседу нужно время, чтобы зарегистрировать правила; сборке — ещё и
+    // пройти первый запуск (страница приветствия настраивает движок).
+    await new Promise(resolve => setTimeout(resolve, neighbor || ext ? 4000 : 1000));
     // --ubol-mode complete: переключить uBO Lite в режим «Полный» (по
     // умолчанию «Оптимальный», и общая косметика в нём не работает). Делаем
     // это его же сообщением со страницы его настроек.
@@ -85,7 +90,7 @@ try {
     await fsp.rm(profile, { recursive: true, force: true }).catch(() => {});
 }
 
-const label = `${withUs ? 'мы' : ''}${withUs && neighbor ? ' + ' : ''}${neighbor || ''}` || 'никого';
+const label = `${withUs ? (ext ? 'Cleathernet' : 'мы') : ''}${withUs && neighbor ? ' + ' : ''}${neighbor || ''}` || 'никого';
 const fired = doc => {
     const r = out[doc] || {};
     return {
@@ -107,7 +112,9 @@ if (withUs && !neighbor) {
         if (r.error) bad.push(`${doc}: ${r.error}`);
         if (r.bait) bad.push(`${doc}: приманка спрятана`);
         if (r.yandexBait) bad.push(`${doc}: приманка Яндекса спрятана`);
-        if (r.adScriptBlocked) bad.push(`${doc}: рекламный скрипт не загрузился`);
+        // В сборке движок режет рекламные запросы — это его работа, так
+        // ведёт себя любой блокировщик; строго проверяем остальное.
+        if (r.adScriptBlocked && !ext) bad.push(`${doc}: рекламный скрипт не загрузился`);
         if ((r.patchedNatives || []).length) bad.push(`${doc}: подменены ${r.patchedNatives.join(',')}`);
         if (r.foreignStyleRules) bad.push(`${doc}: чужие правила в styleSheets`);
         if ((r.suspiciousGlobals || []).length) bad.push(`${doc}: глобалы ${r.suspiciousGlobals.join(',')}`);

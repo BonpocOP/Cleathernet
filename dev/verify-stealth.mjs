@@ -7,6 +7,7 @@
 //   node verify-stealth.mjs [адрес игры] [--headed]
 
 import { chromium } from 'playwright';
+import { browserOptions } from './browser.mjs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
@@ -20,7 +21,7 @@ const headed = argv.includes('--headed');
 
 const profile = await fs.mkdtemp(path.join(os.tmpdir(), 'ygab-verify-'));
 const context = await chromium.launchPersistentContext(profile, {
-    executablePath: path.join(DEV, '.browsers', 'chrome-win64', 'chrome.exe'),
+    ...browserOptions(),
     headless: !headed,
     viewport: { width: 1600, height: 900 },
     locale: 'ru-RU',

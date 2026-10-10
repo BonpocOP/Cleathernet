@@ -54,6 +54,15 @@
     overflow-wrap: anywhere;
 }
 
+.site-row > span {
+    flex: 1;
+}
+
+.site-row__since {
+    color: var(--muted);
+    font-size: 12px;
+}
+
 .site-row__button {
     flex: none;
     padding: 6px 12px;

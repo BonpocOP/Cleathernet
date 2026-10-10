@@ -44,7 +44,7 @@ try {
     check('та же версия: метки нет', !same.newer && same.badge === '' && same.stored === null, same);
 
     const fresh = await worker.evaluate(async () => {
-        const newer = await applyRelease({ tag_name: 'v99.0.0', html_url: 'https://github.com/BonpocOP/YandexAdBlocker/releases/tag/v99.0.0' });
+        const newer = await applyRelease({ tag_name: 'v99.0.0', html_url: 'https://github.com/BonpocOP/Cleathernet/releases/tag/v99.0.0' });
         return { newer, badge: await chrome.action.getBadgeText({}), stored: (await chrome.storage.local.get('ygab.update'))['ygab.update'] };
     });
     check('новая версия: метка на значке и запись в хранилище', fresh.newer && fresh.badge === '↑' && fresh.stored && fresh.stored.version === '99.0.0', fresh);

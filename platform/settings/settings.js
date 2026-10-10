@@ -5,21 +5,7 @@
 // прячет приманки детекторов, и нас начинают замечать. Панель uBO Lite
 // остаётся в архиве (GPLv3), но мы на неё не ссылаемся.
 
-const OFF_SITES_KEY = 'ygab.offSites';
-
-const ANNOYANCES = [
-    ['annoyances-cookies', 'Уведомления о cookie', 'Плашки и окна «Мы используем cookie»'],
-    ['annoyances-overlays', 'Окна поверх страницы', 'Подписки, опросы и прочие перекрытия'],
-    ['annoyances-notifications', 'Просьбы включить уведомления', 'Окна «Разрешите присылать уведомления»'],
-    ['annoyances-social', 'Кнопки и виджеты соцсетей', 'Панели «Поделиться», встроенные ленты'],
-    ['annoyances-widgets', 'Чаты поддержки', 'Кнопки онлайн-консультантов в углу'],
-    ['annoyances-ai', 'ИИ-помощники', 'Встроенные на сайты чат-боты и подсказки'],
-    ['annoyances-others', 'Прочее', 'Всё остальное назойливое; может задеть нужное']
-];
-
-const REGIONAL = [
-    ['rus-0', 'RU AdList', 'Реклама на русских, украинских, белорусских и казахских сайтах']
-];
+import { OFF_SITES_KEY, readOffSites, writeOffSites, readOffSince, sinceText } from '../shared/site-state.js';
 
 const $ = id => document.getElementById(id);
 const send = message => chrome.runtime.sendMessage(message);
@@ -41,9 +27,27 @@ async function setRuleset(id, on) {
     await send({ what: 'applyRulesets', enabledRulesets: next });
 }
 
-function renderToggles(list, container, enabled) {
+// Флажки — из каталога функций (platform/features.json): разделы и
+// функции. Пока все функции — наборы движка (type: ruleset).
+function renderSections(catalog, container, enabled) {
     container.textContent = '';
-    for (const [id, name, hint] of list) {
+    for (const section of catalog.sections) {
+        const card = document.createElement('section');
+        card.className = 'card';
+        card.dataset.section = section.id;
+        const heading = document.createElement('h2');
+        heading.textContent = section.title;
+        const list = document.createElement('ul');
+        list.className = 'toggles';
+        card.append(heading, list);
+        renderToggles(section.features.filter(feature => feature.type === 'ruleset'), list, enabled);
+        container.append(card);
+    }
+}
+
+function renderToggles(features, container, enabled) {
+    container.textContent = '';
+    for (const { ruleset: id, title: name, hint } of features) {
         const item = document.createElement('li');
         item.className = 'toggle';
         const label = document.createElement('label');
@@ -84,11 +88,10 @@ function renderToggles(list, container, enabled) {
 // Выключенные сайты — из двух мест: наш список и сайты без фильтрации у
 // движка. Обычно совпадают; расходятся, если сайт выключали в его панели.
 async function offSites() {
-    const [stored, modes] = await Promise.all([
-        chrome.storage.local.get({ [OFF_SITES_KEY]: [] }),
+    const [ours, modes] = await Promise.all([
+        readOffSites(),
         send({ what: 'getFilteringModeDetails' })
     ]);
-    const ours = Array.isArray(stored[OFF_SITES_KEY]) ? stored[OFF_SITES_KEY] : [];
     const engine = (modes && Array.isArray(modes.none) ? modes.none : []).filter(host => host !== 'all-urls');
     return [...new Set(ours.concat(engine))].sort();
 }
@@ -96,13 +99,11 @@ async function offSites() {
 async function enableSite(host) {
     const level = await send({ what: 'getDefaultFilteringMode' });
     await send({ what: 'setFilteringMode', hostname: host, level });
-    const stored = await chrome.storage.local.get({ [OFF_SITES_KEY]: [] });
-    const list = Array.isArray(stored[OFF_SITES_KEY]) ? stored[OFF_SITES_KEY] : [];
-    await chrome.storage.local.set({ [OFF_SITES_KEY]: list.filter(site => site !== host) });
+    await writeOffSites((await readOffSites()).filter(site => site !== host));
 }
 
 async function renderOffSites() {
-    const hosts = await offSites();
+    const [hosts, offSince] = await Promise.all([offSites(), readOffSince()]);
     const container = $('offSites');
     container.textContent = '';
     $('offEmpty').hidden = hosts.length !== 0;
@@ -111,26 +112,35 @@ async function renderOffSites() {
         item.className = 'site-row';
         const name = document.createElement('span');
         name.textContent = host;
+        const since = document.createElement('small');
+        since.className = 'site-row__since';
+        since.textContent = sinceText(offSince[host]);
         const button = document.createElement('button');
         button.type = 'button';
         button.className = 'site-row__button';
         button.textContent = 'Включить';
         button.addEventListener('click', async () => {
             button.disabled = true;
-            await enableSite(host).catch(() => status('Не удалось включить'));
-            status(`На ${host} снова работает`);
+            try {
+                await enableSite(host);
+                status(`На ${host} снова работает`);
+            } catch {
+                status('Не удалось включить');
+            }
             renderOffSites();
         });
-        item.append(name, button);
+        item.append(name, since, button);
         container.append(item);
     }
 }
 
 /* ---------- старт ---------- */
 
-const enabled = await send({ what: 'getEnabledRulesets' });
-renderToggles(ANNOYANCES, $('annoyances'), enabled);
-renderToggles(REGIONAL, $('regional'), enabled);
+const [enabled, catalog] = await Promise.all([
+    send({ what: 'getEnabledRulesets' }),
+    fetch('../features.json').then(response => response.json())
+]);
+renderSections(catalog, $('features'), enabled);
 renderOffSites();
 chrome.storage.onChanged.addListener((changes, area) => {
     if (area === 'local' && OFF_SITES_KEY in changes) {

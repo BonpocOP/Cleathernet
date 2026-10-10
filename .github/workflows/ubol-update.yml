@@ -6,6 +6,11 @@
 # pull request; слить и выпустить релиз решает человек. Красное — сценарий
 # падает, и GitHub присылает письмо: значит, в новой версии что-то
 # поменялось, и разбираться нужно до обновления.
+#
+# Запрос на слияние от бота легко не заметить (запрос на 2026.930 провисел
+# незамеченным с 05.10). Поэтому на каждую новую версию открывается ещё и
+# задача (issue) с упоминанием владельца — GitHub присылает о ней письмо.
+# Запросы на версии старее последней закрываются сами.
 name: uBO Lite update
 
 on:
@@ -16,6 +21,7 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  issues: write
 
 jobs:
   update:
@@ -32,6 +38,19 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: node dev/ubol-latest.mjs
+
+      # Открытые запросы на другие версии устарели: либо вышла версия
+      # новее, либо основная ветка уже на последней.
+      - name: Закрыть устаревшие запросы
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.latest.outputs.version }}
+        run: |
+          gh pr list --state open --json number,headRefName \
+            --jq ".[] | select(.headRefName | startswith(\"ubol/\")) | select(.headRefName != \"ubol/$VERSION\") | .number" |
+          while read -r number; do
+            gh pr close "$number" --delete-branch --comment "Устарел: последняя версия uBO Lite — $VERSION."
+          done
 
       # Запрос по этой версии уже был (открыт, слит или отклонён) — ничего
       # не делаем. Ветка есть, а запроса нет — прошлый запуск упал на
@@ -68,6 +87,8 @@ jobs:
           node build-extension.mjs
           node test-build.mjs
           node test-game-hook.mjs --ext ../build/extension
+          node test-generic.mjs
+          node test-detectors.mjs --ext ../build/extension
 
       - name: Ветка
         if: steps.open.outputs.state == 'new'
@@ -89,4 +110,21 @@ jobs:
           VERSION: ${{ steps.latest.outputs.version }}
           PREVIOUS: ${{ steps.latest.outputs.previous }}
         run: |
-          gh pr create             --base "${{ github.event.repository.default_branch }}"             --head "ubol/$VERSION"             --title "uBO Lite $PREVIOUS → $VERSION"             --body "Новая версия движка. Сборка, договор с движком и тесты (сборка, Яндекс.Игры на сборке) прошли. Что изменилось у них: https://github.com/uBlockOrigin/uBOL-home/releases/tag/$VERSION"
+          gh pr create             --base "${{ github.event.repository.default_branch }}"             --head "ubol/$VERSION"             --title "uBO Lite $PREVIOUS → $VERSION"             --body "Новая версия движка. Сборка, договор с движком и тесты (сборка, Яндекс.Игры на сборке, общий механизм) прошли. Что изменилось у них: https://github.com/uBlockOrigin/uBOL-home/releases/tag/$VERSION"
+
+      # Письмо владельцу: задача на каждую новую версию, одна на версию.
+      # Если тесты упали, до этого шага сценарий не дойдёт — тогда письмо
+      # GitHub пришлёт о падении.
+      - name: Задача-напоминание
+        if: steps.latest.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.latest.outputs.version }}
+          PREVIOUS: ${{ steps.latest.outputs.previous }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          TITLE="Обновить uBO Lite до $VERSION"
+          if [ "$(gh issue list --state all --search "\"$TITLE\" in:title" --json number --jq length)" = "0" ]; then
+            PR="$(gh pr list --head "ubol/$VERSION" --state open --json url --jq '.[0].url')"
+            gh issue create --title "$TITLE" --body "@$OWNER вышла uBO Lite $VERSION (у нас $PREVIOUS). Сборка и тесты прошли, запрос на слияние: ${PR:-не найден}. Что сделать: открыть запрос → Merge pull request; затем выпустить релиз. Что изменилось у них: https://github.com/uBlockOrigin/uBOL-home/releases/tag/$VERSION"
+          fi

@@ -29,6 +29,28 @@ const check = (name, ok, detail) => {
     console.log(`${ok ? 'ОК  ' : 'СБОЙ'} ${name}${ok ? '' : '  → ' + JSON.stringify(detail)}`);
 };
 
+// «Где мы работаем»: у сборки одно место (platform/shared/site-state.js),
+// у слоя Игр — своя копия, которую мы не трогаем. Ключи хранилища должны
+// совпадать, иначе выключение на сайте не дойдёт до одного из слоёв.
+// Файлы Игр только читаем.
+{
+    const ROOT = path.resolve(DEV, '..');
+    const read = file => fs.readFile(path.join(ROOT, file), 'utf8');
+    const keyIn = (text, name) => (text.match(new RegExp(`${name} = '([^']+)'`)) || [])[1];
+    const shared = await read('platform/shared/site-state.js');
+    const offKey = keyIn(shared, 'export const OFF_SITES_KEY');
+    const games = {
+        'src/content/config.js': keyIn(await read('src/content/config.js'), 'const OFF_SITES_KEY'),
+        'src/frame.js': keyIn(await read('src/frame.js'), 'const OFF_SITES_KEY')
+    };
+    const enabledKey = keyIn(shared, 'export const ENABLED_KEY');
+    const gamesEnabled = /\benabled: true\b/.test(await read('src/content/config.js')) && /\benabled: true\b/.test(await read('src/frame.js'));
+    check('выключенные сайты: один ключ у сборки и у слоя Игр, общий выключатель — «enabled» у обоих',
+        offKey && Object.values(games).every(key => key === offKey) && enabledKey === 'enabled' && gamesEnabled, { сборка: offKey, игры: games, enabledKey, gamesEnabled });
+    const bundled = await fs.readFile(path.join(EXT, 'ygab', 'platform', 'bundle', 'generic.js'), 'utf8');
+    check('общий механизм в сборке берёт «где работать» из site-state.js', bundled.includes('function watchActive(') && !/^export /m.test(bundled), null);
+}
+
 const profile = await fs.mkdtemp(path.join(os.tmpdir(), 'ygab-build-'));
 const context = await chromium.launchPersistentContext(profile, {
     ...browserOptions(),
@@ -76,10 +98,10 @@ try {
         }));
         check('RU AdList (rus-0) включён при английском браузере', setup.rulesets.includes('rus-0'), setup.rulesets);
         check('автоперезагрузка движка выключена', setup.autoReload === false, setup.autoReload);
-        check('«Раздражители»: включены только cookie и всплывашки',
-            setup.rulesets.includes('annoyances-cookies') && setup.rulesets.includes('annoyances-overlays') &&
-            !setup.rulesets.some(id => /^annoyances-(social|widgets|others|notifications|ai)$/.test(id)) && !setup.rulesets.includes('rus-1'), setup.rulesets);
-        check('шаги настройки записаны', setup.stored && setup.stored.step === 2, setup.stored);
+        check('«Раздражители»: включены cookie, всплывашки, уведомления и ИИ-помощники — чаты, соцсети и «прочее» нет',
+            ['annoyances-cookies', 'annoyances-overlays', 'annoyances-notifications', 'annoyances-ai'].every(id => setup.rulesets.includes(id)) &&
+            !setup.rulesets.some(id => /^annoyances-(social|widgets|others)$/.test(id)) && !setup.rulesets.includes('rus-1'), setup.rulesets);
+        check('шаги настройки записаны', setup.stored && setup.stored.step === 3, setup.stored);
 
         // Сделанный шаг не повторяется: выбор пользователя не перезаписываем.
         const again = await welcome.evaluate(async () => {
@@ -186,10 +208,15 @@ try {
         on: document.getElementById('siteOn').checked,
         note: document.getElementById('siteNote').hidden ? null : document.getElementById('siteNoteText').textContent,
         level: await chrome.runtime.sendMessage({ what: 'getFilteringMode', hostname: 'test.example' }),
-        offSites: (await chrome.storage.local.get('ygab.offSites'))['ygab.offSites']
+        offSites: (await chrome.storage.local.get('ygab.offSites'))['ygab.offSites'],
+        since: (await chrome.storage.local.get('ygab.offSince'))['ygab.offSince'],
+        state: document.getElementById('siteState').textContent
     }));
     check('выключить на сайте: движок в режиме «без фильтрации», сайт в нашем списке, есть строка про обновление',
         !off.on && off.level === 0 && Array.isArray(off.offSites) && off.offSites.includes('test.example') && off.note, off);
+    // Забытое выключение видно: в попапе — с какого дня.
+    check('выключить на сайте: дата выключения запомнена и видна в попапе',
+        off.since && typeof off.since['test.example'] === 'number' && /^Выключено на этом сайте с \d{2}\.\d{2}$/.test(off.state), off);
 
     const seenOff = { surrogate: false, googleResponse: false };
     const onResponse = response => {
@@ -274,18 +301,20 @@ try {
         text: document.body.innerText,
         cookies: document.querySelector('[data-ruleset="annoyances-cookies"]')?.checked,
         notifications: document.querySelector('[data-ruleset="annoyances-notifications"]')?.checked,
+        social: document.querySelector('[data-ruleset="annoyances-social"]')?.checked,
         ru: document.querySelector('[data-ruleset="rus-0"]')?.checked,
         sites: Array.from(document.querySelectorAll('#offSites li span')).map(el => el.textContent),
+        since: Array.from(document.querySelectorAll('#offSites li .site-row__since')).map(el => el.textContent),
         engine: document.getElementById('engineVersion').textContent
     }));
     check('настройки: без режимов фильтрации, списки отмечены как в движке',
-        !/Полный|Оптимальный|Базовый|разработчик/i.test(page1.text) && page1.cookies === true && page1.notifications === false && page1.ru === true && /^\d{4}\./.test(page1.engine), { ...page1, text: undefined });
-    check('настройки: выключенный сайт в списке', page1.sites.includes('test.example'), page1.sites);
+        !/Полный|Оптимальный|Базовый|разработчик/i.test(page1.text) && page1.cookies === true && page1.notifications === true && page1.social === false && page1.ru === true && /^\d{4}\./.test(page1.engine), { ...page1, text: undefined });
+    check('настройки: выключенный сайт в списке, с датой', page1.sites.includes('test.example') && page1.since.some(t => /^с \d{2}\.\d{2}$/.test(t)), { sites: page1.sites, since: page1.since });
 
-    await settings.click('[data-ruleset="annoyances-notifications"]');
+    await settings.click('[data-ruleset="annoyances-social"]');
     await settings.waitForTimeout(1000);
     const afterToggle = await settings.evaluate(() => chrome.runtime.sendMessage({ what: 'getEnabledRulesets' }));
-    check('настройки: переключатель списка меняет наборы движка', afterToggle.includes('annoyances-notifications'), afterToggle);
+    check('настройки: переключатель списка меняет наборы движка', afterToggle.includes('annoyances-social'), afterToggle);
 
     await settings.click('#offSites .site-row__button');
     await settings.waitForTimeout(1000);

@@ -10,8 +10,8 @@
 
 import { ensureSetup } from '../setup.js';
 import { worksOn, icon } from '../pages.js';
+import { covers, readOffSites as offSites, writeOffSites, readOffSince, sinceText } from '../shared/site-state.js';
 
-const OFF_SITES_KEY = 'ygab.offSites';
 const NO_STRETCH_KEY = 'noStretchGames';
 const GAME_KEYS = { sticky: true, fullscreen: true, catalog: true };
 const MODE_NONE = 0;
@@ -33,29 +33,24 @@ const isWeb = worksOn(url);
 // www. не различаем: выключили на www.avito.ru — выключено и на avito.ru.
 const host = isWeb ? url.hostname.replace(/^www\./, '') : '';
 
-const covers = (site, hostname) => hostname === site || hostname.endsWith('.' + site);
-
-// Список — в local, как и выключенные сайты движка (см. content/config.js).
-async function offSites() {
-    const stored = await chrome.storage.local.get({ [OFF_SITES_KEY]: [] });
-    return Array.isArray(stored[OFF_SITES_KEY]) ? stored[OFF_SITES_KEY] : [];
-}
-
 /* ---------- сайт ---------- */
 
 async function siteState() {
-    const [level, list] = await Promise.all([
+    const [level, list, since] = await Promise.all([
         send({ what: 'getFilteringMode', hostname: host }),
-        offSites()
+        offSites(),
+        readOffSince()
     ]);
-    return { engineOff: level === MODE_NONE, oursOff: list.some(site => covers(site, host)) };
+    const entry = list.find(site => covers(site, host));
+    return { engineOff: level === MODE_NONE, oursOff: Boolean(entry), offSince: entry ? since[entry] || null : null };
 }
 
 function renderSite(state, justChanged, alsoEnabled = []) {
     const on = !state.engineOff && !state.oursOff;
     $('siteOn').checked = on;
     $('site').classList.toggle('site_off', !on);
-    $('siteState').textContent = on ? 'Работает на этом сайте' : 'Выключено на этом сайте';
+    // Дата — чтобы забытое выключение было видно (реклама «вдруг» на сайте).
+    $('siteState').textContent = on ? 'Работает на этом сайте' : ['Выключено на этом сайте', sinceText(state.offSince)].filter(Boolean).join(' ');
     $('options').classList.toggle('options_disabled', !on);
 
     // Строка про перезагрузку — только после переключения: при обычном
@@ -91,11 +86,11 @@ async function setSite(on) {
         for (const site of enabled) {
             await send({ what: 'setFilteringMode', hostname: site, level });
         }
-        await chrome.storage.local.set({ [OFF_SITES_KEY]: list.filter(site => !covers(site, host)) });
+        await writeOffSites(list.filter(site => !covers(site, host)));
     } else {
         await send({ what: 'setFilteringMode', hostname: host, level: MODE_NONE });
         if (!list.includes(host)) {
-            await chrome.storage.local.set({ [OFF_SITES_KEY]: list.concat(host) });
+            await writeOffSites(list.concat(host));
         }
     }
     if (tab && tab.id) {
@@ -194,6 +189,8 @@ async function buildReport() {
     const report = {
         product: manifest.name,
         version: manifest.version,
+        // Отметка локальной сборки (dev/install-local.mjs): какая сборка стоит.
+        build: manifest.version_name || null,
         url: tab && tab.url ? tab.url : null,
         browser: navigator.userAgent,
         language: navigator.language,
@@ -208,13 +205,32 @@ async function buildReport() {
         ]);
         report.engine = { level, defaultLevel, rulesets };
         report.site = { host, ...state };
-        }
+    }
+    // Общий механизм: что и почему схлопнуто на этой странице.
+    const generic = isWeb && tab.id ? await ask('getGenericReport') : null;
+    if (generic) {
+        report.generic = generic;
+    }
     const games = isWeb && tab.id ? await ask('getReport') : null;
     if (games && games.report) {
         report.games = games.report;
     }
     return report;
 }
+
+// Раздел открыли — сразу видно, осталось ли что-то похожее на рекламу:
+// тогда отчёт особенно нужен (считает report.js общего механизма).
+$('reportBox').addEventListener('toggle', async () => {
+    if (!$('reportBox').open || !isWeb || !tab.id) {
+        return;
+    }
+    const generic = await ask('getGenericReport');
+    const likely = generic && generic.leftovers && generic.leftovers.likely;
+    $('leftovers').textContent = likely
+        ? `На странице осталось похожих на рекламу блоков: ${likely}. Скопируйте отчёт — он покажет, какие.`
+        : '';
+    $('leftovers').hidden = !likely;
+});
 
 $('report').addEventListener('click', async () => {
     const button = $('report');
@@ -241,6 +257,6 @@ $('advanced').addEventListener('click', event => {
 const { 'ygab.update': update } = await chrome.storage.local.get({ 'ygab.update': null });
 if (update && update.version) {
     $('update').textContent = 'Доступна версия ' + update.version + ' — скачать';
-    $('update').href = update.url || 'https://github.com/BonpocOP/YandexAdBlocker/releases/latest';
+    $('update').href = update.url || 'https://github.com/BonpocOP/Cleathernet/releases/latest';
     $('update').hidden = false;
 }

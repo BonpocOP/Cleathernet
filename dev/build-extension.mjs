@@ -23,7 +23,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import zlib from 'node:zlib';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { checkContract } from './ubol-contract.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -172,10 +172,68 @@ function checkVendor(theirs) {
     }
 }
 
+// Страницы, где работает слой игр (content script с src/bundle/content.js).
+function gamePages(mine) {
+    const games = (mine.content_scripts || []).find(script => (script.js || []).includes('src/bundle/content.js'));
+    if (!games) {
+        throw new Error('В manifest.json нет content script слоя игр (src/bundle/content.js)');
+    }
+    return games.matches;
+}
+
 const union = (...lists) => [...new Set(lists.flat().filter(Boolean))].sort();
 const ours = file => `${OURS}/${file}`;
 
-function mergeManifest(theirs, mine) {
+// Наши модули: platform/<папка>/module.json — что модуль кладёт в манифест
+// (сейчас — content scripts). Новый модуль подключается своим module.json,
+// без правок сборки. Слой Игр — не модуль: он описан корневым manifest.json
+// и не меняется. «@games» в exclude_matches — его страницы.
+const SCRIPT_KEYS = ['matches', 'exclude_matches', 'include_globs', 'exclude_globs', 'js', 'css', 'run_at', 'all_frames', 'match_about_blank', 'world'];
+
+function readModules() {
+    const dir = path.join(ROOT, 'platform');
+    return fs.readdirSync(dir, { withFileTypes: true })
+        .filter(entry => entry.isDirectory() && fs.existsSync(path.join(dir, entry.name, 'module.json')))
+        .map(entry => entry.name)
+        .sort()
+        .map(name => {
+            const module = JSON.parse(fs.readFileSync(path.join(dir, name, 'module.json'), 'utf8'));
+            if (module.id !== name) {
+                throw new Error(`platform/${name}/module.json: id «${module.id}» не совпадает с папкой`);
+            }
+            for (const script of module.content_scripts || []) {
+                for (const file of [...(script.js || []), ...(script.css || [])]) {
+                    if (!fs.existsSync(path.join(ROOT, file))) {
+                        throw new Error(`Модуль ${name}: нет файла ${file}`);
+                    }
+                }
+            }
+            return module;
+        });
+}
+
+function moduleScripts(modules, mine) {
+    return modules.flatMap(module => (module.content_scripts || []).map(script => {
+        const out = {};
+        for (const key of SCRIPT_KEYS) {
+            if (key in script) {
+                out[key] = script[key];
+            }
+        }
+        if (out.exclude_matches) {
+            out.exclude_matches = out.exclude_matches.flatMap(item => (item === '@games' ? gamePages(mine) : [item]));
+        }
+        if (out.js) {
+            out.js = out.js.map(ours);
+        }
+        if (out.css) {
+            out.css = out.css.map(ours);
+        }
+        return out;
+    }));
+}
+
+function mergeManifest(theirs, mine, modules) {
     // Иконка Cleathernet (platform/icons), а не «Y» расширения для игр.
     const icons = Object.fromEntries([16, 32, 48, 128].map(size => [String(size), ours(`platform/icons/icon${size}.png`)]));
     const merged = {
@@ -196,11 +254,15 @@ function mergeManifest(theirs, mine) {
         // который прячет приманки детекторов и выдаёт нас. Панель остаётся
         // в архиве (GPLv3), но ссылок на неё нет.
         options_page: ours('platform/settings/settings.html'),
-        content_scripts: (mine.content_scripts || []).map(script => ({
-            ...script,
-            ...(script.js ? { js: script.js.map(ours) } : {}),
-            ...(script.css ? { css: script.css.map(ours) } : {})
-        })),
+        content_scripts: [
+            ...(mine.content_scripts || []).map(script => ({
+                ...script,
+                ...(script.js ? { js: script.js.map(ours) } : {}),
+                ...(script.css ? { css: script.css.map(ours) } : {})
+            })),
+            // Наши модули (общий механизм и др.) — из их module.json.
+            ...moduleScripts(modules, mine)
+        ],
         permissions: union(theirs.permissions, mine.permissions),
         // <all_urls> у uBO Lite покрывает наши адреса — без дублей.
         host_permissions: (theirs.host_permissions || []).includes('<all_urls>')
@@ -247,8 +309,13 @@ for (const file of files) {
     fs.copyFileSync(path.join(ROOT, file), target);
 }
 
-// platform/ — целиком: там только файлы этой сборки.
-fs.cpSync(path.join(ROOT, 'platform'), path.join(OUT, OURS, 'platform'), { recursive: true });
+// platform/ — целиком: там только файлы этой сборки. Исходники общего
+// механизма не нужны — в сборку идёт собранный platform/bundle/generic.js;
+// module.json — описания для сборки, расширению они не нужны.
+fs.cpSync(path.join(ROOT, 'platform'), path.join(OUT, OURS, 'platform'), {
+    recursive: true,
+    filter: source => path.relative(path.join(ROOT, 'platform'), source) !== 'generic' && path.basename(source) !== 'module.json'
+});
 // Значок на панели: движок сам ставит свои img/icon_*.png (обычную и
 // серую _off для выключенного сайта) — кладём на их место наши. Код движка
 // не трогаем, только картинки.
@@ -276,7 +343,42 @@ fs.writeFileSync(path.join(OUT, OURS, 'background.js'), [
     ''
 ].join('\n'));
 
-const merged = mergeManifest(theirs, mine);
+// Каталог функций (platform/features.json) — то, что видит человек в
+// настройках. Набор, которого нет в движке, или умолчание, которое не
+// включает ни один шаг настройки (platform/setup.js), — ошибка сборки:
+// иначе флажок ничего бы не делал или врал о том, что включено.
+{
+    const catalog = JSON.parse(fs.readFileSync(path.join(ROOT, 'platform', 'features.json'), 'utf8'));
+    const engineRulesets = new Set(JSON.parse(fs.readFileSync(path.join(OUT, 'rulesets', 'ruleset-details.json'), 'utf8')).map(item => item.id));
+    const { STEPS } = await import(pathToFileURL(path.join(ROOT, 'platform', 'setup.js')).href);
+    const byDefault = new Set(STEPS.flatMap(step => step.addRulesets || []));
+    const problems = [];
+    const seenIds = new Set();
+    for (const section of catalog.sections) {
+        for (const feature of section.features) {
+            if (seenIds.has(feature.id)) {
+                problems.push(`${feature.id}: повторяется`);
+            }
+            seenIds.add(feature.id);
+            if (feature.type !== 'ruleset') {
+                problems.push(`${feature.id}: неизвестный тип ${feature.type}`);
+                continue;
+            }
+            if (!engineRulesets.has(feature.ruleset)) {
+                problems.push(`${feature.id}: в uBO Lite ${pin.version} нет набора ${feature.ruleset}`);
+            }
+            if (Boolean(feature.default) !== byDefault.has(feature.ruleset)) {
+                problems.push(`${feature.id}: в каталоге default=${Boolean(feature.default)}, а в шагах setup.js ${byDefault.has(feature.ruleset) ? 'включается' : 'не включается'}`);
+            }
+        }
+    }
+    if (problems.length) {
+        throw new Error('platform/features.json не сходится с движком или setup.js:\n  - ' + problems.join('\n  - '));
+    }
+}
+
+const modules = readModules();
+const merged = mergeManifest(theirs, mine, modules);
 fs.writeFileSync(path.join(OUT, 'manifest.json'), JSON.stringify(merged, null, 2) + '\n');
 
 console.log(`build/extension — ${NAME} ${merged.version} на uBO Lite ${pin.version}, наших файлов: ${files.length}`);

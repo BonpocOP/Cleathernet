@@ -35,11 +35,27 @@ jobs:
           fi
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
 
-      - name: Сборка
+      # Выпуск — только если сборка проходит те же тесты, что и еженедельная
+      # проверка uBO Lite: иначе сломанный архив ушёл бы по ссылке из README.
+      - name: Инструменты тестов
         working-directory: dev
         run: |
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Сборка и тесты
+        working-directory: dev
+        env:
+          YGAB_CHROME: bundled
+        run: |
           node build.mjs --check
+          node test-game-hook.mjs
+          node test-update.mjs
           node build-extension.mjs
+          node test-build.mjs
+          node test-game-hook.mjs --ext ../build/extension
+          node test-generic.mjs
+          node test-detectors.mjs --ext ../build/extension
 
       - name: Упаковка
         run: |
