@@ -1,5 +1,6 @@
 [
   "signs.js",
+  "lists.js",
   "score.js",
   "slots.js",
   "apply.js",

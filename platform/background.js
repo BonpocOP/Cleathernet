@@ -58,7 +58,9 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
     const target = sender.documentId
         ? { tabId: sender.tab.id, documentIds: [sender.documentId] }
         : { tabId: sender.tab.id, frameIds: [sender.frameId || 0] };
-    const key = CSS_KEY + sender.tab.id;
+    // part — отдельная таблица со своим ключом (ранняя таблица по спискам
+    // движка, generic/apply.js pushListsCss).
+    const key = CSS_KEY + sender.tab.id + (message.part === 'lists' ? '.lists' : '');
     (async () => {
         if (message.add) {
             await chrome.scripting.insertCSS({ target, css: message.add, origin: 'USER' });
@@ -76,7 +78,7 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
 });
 
 chrome.tabs.onRemoved.addListener(tabId => {
-    chrome.storage.local.remove(CSS_KEY + tabId).catch(() => {});
+    chrome.storage.local.remove([CSS_KEY + tabId, CSS_KEY + tabId + '.lists']).catch(() => {});
 });
 
 // Снять таблицы, оставшиеся от прежнего экземпляра расширения. После

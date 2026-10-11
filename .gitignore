@@ -36,3 +36,5 @@ dev/.cache/
 
 # архив Cleathernet для ручной проверки — ~10 МБ, в git не храним
 dist/cleathernet-*.zip
+# Список популярных адресов для сборки (публичные адреса, не отчёты).
+!dev/popular-hosts.txt

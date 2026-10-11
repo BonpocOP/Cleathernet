@@ -69,10 +69,15 @@ function evidence(root, visibleOnly) {
     return {
         network: networkIn(root, visibleOnly),
         orphan: visibleOnly && orphanLabelIn(root),
-        label: labelsDeep(root, visibleOnly).some(label => !isMarkingLabel(label.textContent) || atTextEdge(root, label)),
+        label: labelsDeep(root, visibleOnly).some(label => isPlaceLabel(label.textContent)
+            ? placeCreative(root, visibleOnly)
+            : !isMarkingLabel(label.textContent) || atTextEdge(root, label)),
         // Маркировка — текст: у пустого места его нет.
         marking: visibleOnly && markingIn(root),
         tracking: trackingIn(root),
+        // Ссылка учёта по сетевым правилам движка — дороже, спрашивается
+        // в decide(), только когда может решить.
+        trackedLink: () => blockedLinkIn(root),
         name: nameLevel({
             strong: names.strong > 0,
             cover: Boolean(names.strong && names.outer && covering(names.outer) && !holdsSmallerAd(names.outer)),
@@ -104,6 +109,12 @@ function score(ev) {
 // реклама, а, например, недогруженная карточка).
 // Причина (reason) — для отчёта: empty, network, label, marking, name.
 function decide(ev, empty) {
+    if (!empty && !ev.tracking && ev.trackedLink) {
+        const before = score(ev).total;
+        if (before < THRESHOLD && before + STRENGTH.tracking >= THRESHOLD && ev.trackedLink()) {
+            ev.tracking = true;
+        }
+    }
     const { total, signals } = score(ev);
     if (empty) {
         return ev.network || ev.label || ev.name ? { reason: 'empty', total, signals } : null;

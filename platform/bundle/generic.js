@@ -339,7 +339,8 @@ function networkIn(root, visibleOnly = false) {
             return true;
         }
     }
-    return false;
+    // Рекламные серверы из списков движка (lists.js).
+    return listAddressIn(root, visibleOnly);
 }
 
 /* ---------- ссылки учёта кликов ---------- */
@@ -352,6 +353,9 @@ const TRACKING_LINKS = [
     'a[href*="doubleclick.net"]', 'a[href*="ads.vk.com"]', 'a[href*="ad.mail.ru"]'
 ].join(', ');
 
+// Переход через адрес, который сетевые правила движка блокируют целиком,
+// — тоже ссылка учёта (lists.js, blockedLinkIn); его спрашивает decide(),
+// только когда он может решить.
 const trackingIn = root => root.matches(TRACKING_LINKS) || Boolean(root.querySelector(TRACKING_LINKS));
 
 /* ---------- метка «Реклама» ---------- */
@@ -374,6 +378,45 @@ function isLabelText(raw) {
     }
     const bare = text.replace(LABEL_TAIL, '').trim();
     return [text, bare].some(t => LABELS.has(t) || LABELS.has(t.replace(/[aeopcxykmthb]/g, ch => HOMOGLYPHS[ch])));
+}
+
+// Подпись места: кнопка «Отключить рекламу» рядом с баннером — сайт сам
+// говорит, что здесь реклама (klerk, 11.10: полоса над шапкой с картинкой
+// и кнопкой, без метки «Реклама»). Метка — только кнопкой или ссылкой
+// (заголовок статьи «Как отключить рекламу» — нет) и только рядом с
+// креативом (placeCreative): страница подписки «Без рекламы» с той же
+// кнопкой баннера не держит.
+const PLACE_LABELS = new Set(['отключить рекламу', 'убрать рекламу']);
+
+const isPlaceLabel = raw => PLACE_LABELS.has(raw.replace(INVISIBLE, '').replace(/\s+/g, ' ').trim().toLowerCase());
+
+// Место — креатив (фрейм или заметная картинка, видео, холст внутри
+// ссылки) и кнопки сайта; своего текста вне ссылок и кнопок почти нет.
+// Статья «Как отключить рекламу» со ссылкой-скриншотом и той же кнопкой —
+// абзацы текста, не место.
+const PLACE_TEXT = 30;
+const PLACE_CONTROLS = 'a, button, [role="button"], script, style, noscript, template';
+
+function placeCreative(root, visibleOnly) {
+    const counts = el => !visibleOnly || seen(el, AD_MIN_AREA);
+    const creative = [...root.querySelectorAll('iframe')].some(counts) ||
+        [...root.querySelectorAll('a[href] img, a[href] picture, a[href] video, a[href] canvas')].some(counts);
+    if (!creative) {
+        return false;
+    }
+    let text = 0;
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        const parent = node.parentElement;
+        if (!parent || parent.closest(PLACE_CONTROLS) || (visibleOnly && !parent.checkVisibility())) {
+            continue;
+        }
+        text += node.nodeValue.trim().length;
+        if (text > PLACE_TEXT) {
+            return false;
+        }
+    }
+    return true;
 }
 
 // Маркировка одной строкой — тоже метка: «Реклама. Рекламодатель ПАО …
@@ -424,12 +467,21 @@ const sameSite = (a, b) => {
 // Ссылка «Реклама» на свою же страницу («Реклама на сайте», «Рекламодателям»
 // в подвале или меню) — навигация, а не метка рекламы (10.10, набор обычных
 // страниц: так прятались подвал gazeta.ru и колонка vc.ru, а пункт меню,
-// который сайт прячет сам, делал «сиротой» всё меню kp.ru). У меток рекламы
-// в образцах ссылки нет или она ведёт наружу.
+// который сайт прячет сам, делал «сиротой» всё меню kp.ru). Навигация —
+// короткая ссылка, пункт меню («Реклама», «Реклама на сайте»). Метка внутри
+// ссылки-карточки (заголовок, адрес сайта, «Реклама») — часть рекламы, даже
+// если ссылка ведёт на свой сайт: поисковики, агрегаторы и соцсети пускают
+// переходы по рекламе через свой счётчик (Поиск Яндекса, 10.10: подсказки
+// под строкой поиска, yandex.ru/search/_sttc/…).
+const NAV_LINK_TEXT = 40;
+
 const ownPageLink = el => {
     const link = el.closest('a[href]');
+    if (!link || link.matches(TRACKING_LINKS) || (link.textContent || '').replace(/\s+/g, ' ').trim().length > NAV_LINK_TEXT) {
+        return false;
+    }
     try {
-        return Boolean(link) && sameSite(new URL(link.href, location.href).hostname, location.hostname);
+        return sameSite(new URL(link.href, location.href).hostname, location.hostname);
     } catch {
         return false;
     }
@@ -447,7 +499,8 @@ function labelsIn(root, visibleOnly = false) {
             continue;
         }
         const label = value.length <= 40
-            ? isLabelText(value) && isLabelText(el.textContent)
+            ? (isLabelText(value) && isLabelText(el.textContent)) ||
+                (isPlaceLabel(value) && isPlaceLabel(el.textContent) && Boolean(el.closest('button, a[href], [role="button"]')))
             : isMarkingLabel(value);
         if (label && !ownPageLink(el) && (!visibleOnly || seen(el))) {
             out.push(el);
@@ -547,6 +600,352 @@ function markingIn(root) {
     return texts.some(text => MARKING.some(re => re.test(text)));
 }
 
+// ===== platform/generic/lists.js =====
+
+// Признаки из списков движка (dev/list-signs.mjs): правила скрытия по
+// адресу из рекламных наборов (ссылка, фрейм или картинка ведут на
+// рекламный сервер) и адреса, которые сетевые правила блокируют целиком
+// (ссылка учёта). Свой словарь сетей отстаёт: 10.10 баннер на klerk.ru
+// вёл на bs.serving-sys.ru — в RU AdList он был, у нас нет. Данные
+// вклеиваются при сборке; в git их нет — тогда признаки молчат.
+//
+// Не копируем ошибки списков: они прячут сам узел и оставляют пустую
+// рамку (мы схлопываем место), и прячут ссылку внутри текста статьи —
+// предложение рвётся (мы такую не трогаем, inlineInText).
+const LISTS = null;
+
+/* ---------- фильтр адресов (Блум) ---------- */
+
+// Тот же хэш, что при сборке (dev/list-signs.mjs, fnv).
+function fnvHash(s, seed) {
+    let h = seed >>> 0;
+    for (let i = 0; i < s.length; i += 1) {
+        h ^= s.charCodeAt(i);
+        h = Math.imul(h, 16777619) >>> 0;
+    }
+    return h;
+}
+
+// Биты раскрываются при первом вопросе: на большинстве страниц его нет.
+let bloomBits = null;
+
+function bloomHas(bloom, item) {
+    if (!bloomBits) {
+        const raw = atob(bloom.bits);
+        bloomBits = new Uint8Array(raw.length);
+        for (let i = 0; i < raw.length; i += 1) {
+            bloomBits[i] = raw.charCodeAt(i);
+        }
+    }
+    const h1 = fnvHash(item, 2166136261);
+    const h2 = fnvHash(item, 16777619) | 1;
+    for (let i = 0; i < bloom.k; i += 1) {
+        const bit = (h1 + Math.imul(i, h2) >>> 0) % bloom.m;
+        if (!(bloomBits[bit >> 3] & (1 << (bit & 7)))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// Адрес и все его родительские домены: правило на ad.example.com
+// действует и на x.ad.example.com.
+function hostSuffixes(host) {
+    const out = [];
+    for (let h = host.toLowerCase(); h.includes('.'); h = h.slice(h.indexOf('.') + 1)) {
+        out.push(h);
+    }
+    return out;
+}
+
+/* ---------- правила по адресу ---------- */
+
+const RULE = /^(a|iframe|img)((?:\[[^\]]+\])+)(\s*>\s*img)?$/;
+const CONDITION = /\[([a-z-]+)([*^$]?)="([^"]+)"(\s+i)?\]/g;
+// Адрес в значении условия: «://bs.serving-sys.ru/», «https://ad.x.com/»,
+// «.smartadserver.com», «clickbytes.ru/». Остальное («&maxads=») —
+// подстрока без адреса.
+const HOST_IN_VALUE = /^(?:https?)?:?(?:\/\/)?\.?([a-z0-9-]+(?:\.[a-z0-9-]+)+)(?=[/?#:]|$)/i;
+const URL_HOST = /^(?:[a-z][a-z0-9+.-]*:)?\/\/([^/?#:]+)/i;
+
+// Разбор правила — при сборке: dev/list-signs.mjs берёт эту функцию и
+// кладёт итог в LISTS.rules. На странице разбор тысячи правил регулярками
+// стоил 2,6–3,6 мс на каждой странице (Авито, 11.10). Итог: [селектор,
+// тег, «> img», адрес сервера или '', условия [[атрибут, оператор, без
+// учёта регистра, значение], …]].
+function parseListRule(selector) {
+    const m = RULE.exec(selector);
+    if (!m) {
+        return null;
+    }
+    const conds = [...m[2].matchAll(CONDITION)].map(c => [c[1], c[2], Boolean(c[4]), c[4] ? c[3].toLowerCase() : c[3]]);
+    const keyed = m[1] === 'a' && conds.find(c => c[0] === 'href' && HOST_IN_VALUE.test(c[3]));
+    return [selector, m[1], Boolean(m[3]), keyed ? HOST_IN_VALUE.exec(keyed[3])[1].toLowerCase() : '', conds];
+}
+
+const mainAttr = tag => (tag === 'a' ? 'href' : 'src');
+
+// Отсев по тегу — тоже при сборке: одно выражение из строк всех правил
+// тега по адресу — может ли хоть одно подойти (в 15 раз быстрее перебора:
+// Авито, 1263 ссылки — 0,6 мс против 9). Исключения сайта в нём не
+// вычитаются: отсев лишь пропускает лишнее, решают сами правила.
+function listPrefilters(rules) {
+    const out = {};
+    for (const tag of ['a', 'iframe', 'img']) {
+        out[tag] = rules.filter(r => r[1] === tag && !r[3])
+            .flatMap(r => r[4].filter(c => c[0] === mainAttr(tag)).slice(0, 1))
+            .map(c => c[3].replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+    }
+    return out;
+}
+
+let listRules = undefined;
+
+// Правила для этой страницы: без исключений сайта; на сайтах, где авторы
+// списков отключили общие правила (generichide), — никаких. Ссылки с
+// адресом сервера (их большинство) сверяем по указателю «адрес →
+// правила»: на странице тысячи ссылок, и перебирать все правила для
+// каждой дорого. Остальное (фреймы, картинки, подстроки) — по тегу:
+// узел проверяется только правилами своего тега. Одним селектором на
+// всю страницу нельзя: браузер проверяет каждое из сотен правил на
+// каждом узле (Авито, 11.10: +30 мс).
+function rulesHere() {
+    if (listRules !== undefined) {
+        return listRules;
+    }
+    listRules = null;
+    if (!LISTS) {
+        return null;
+    }
+    const here = hostSuffixes(location.hostname);
+    if (here.some(h => LISTS.nohide.includes(h))) {
+        return null;
+    }
+    const skip = new Set(here.flatMap(h => LISTS.exceptions[h] || []));
+    const byHost = new Map();
+    const loose = { a: [], iframe: [], img: [] };
+    const always = { a: [], iframe: [], img: [] };
+    const selectors = [];
+    for (const [selector, tag, img, host, conds] of LISTS.rules) {
+        if (skip.has(selector)) {
+            continue;
+        }
+        selectors.push(selector);
+        const rule = { conds, img };
+        if (host) {
+            if (!byHost.has(host)) {
+                byHost.set(host, []);
+            }
+            byHost.get(host).push(rule);
+            continue;
+        }
+        loose[tag].push(rule);
+        // Правила без условия на адрес (onclick, data-href) проверяются
+        // у каждого узла тега — но только если у него есть их атрибут.
+        if (!conds.some(c => c[0] === mainAttr(tag))) {
+            always[tag].push(rule);
+        }
+    }
+    const alwaysAttrs = {};
+    const prefilter = {};
+    for (const tag of Object.keys(loose)) {
+        alwaysAttrs[tag] = [...new Set(always[tag].flatMap(rule => rule.conds.map(c => c[0])))];
+        prefilter[tag] = LISTS.prefilter[tag] ? new RegExp(LISTS.prefilter[tag], 'i') : null;
+    }
+    const find = [];
+    if (byHost.size || loose.a.length) {
+        find.push('a[href]');
+    }
+    if (loose.a.some(rule => rule.conds.some(c => c[0] !== 'href'))) {
+        find.push('a[onclick]', 'a[data-href]');
+    }
+    for (const tag of ['iframe', 'img']) {
+        if (loose[tag].length) {
+            find.push(tag + '[src]');
+        }
+    }
+    listRules = { byHost, loose, prefilter, always, alwaysAttrs, selectors, find: find.join(', ') };
+    return listRules;
+}
+
+function conditionHolds(attrs, [attr, op, ci, expected]) {
+    let value = attrs(attr);
+    if (value === null) {
+        return false;
+    }
+    if (ci) {
+        value = value.toLowerCase();
+    }
+    return op === '*' ? value.includes(expected)
+        : op === '^' ? value.startsWith(expected)
+            : op === '$' ? value.endsWith(expected)
+                : value === expected;
+}
+
+// Атрибуты узла читаем по разу, сколько бы правил их ни спрашивали.
+function attrReader(el) {
+    const cache = {};
+    return name => (name in cache ? cache[name] : (cache[name] = el.getAttribute(name)));
+}
+
+const ruleHolds = (el, rule, attrs) => rule.conds.every(c => conditionHolds(attrs, c)) && (!rule.img || Boolean(el.querySelector(':scope > img')));
+
+// Правила адреса ссылки (с родительскими доменами) — на адрес, а не на
+// ссылку: на странице сотни ссылок на один адрес.
+const hostRuleCache = new Map();
+
+function rulesForHost(rules, host) {
+    let list = hostRuleCache.get(host);
+    if (list === undefined) {
+        list = hostSuffixes(host).flatMap(h => rules.byHost.get(h) || []);
+        hostRuleCache.set(host, list);
+    }
+    return list;
+}
+
+function listAddressMatch(el) {
+    const rules = rulesHere();
+    const tag = el.localName;
+    if (!rules || !(tag in rules.loose)) {
+        return false;
+    }
+    const attrs = attrReader(el);
+    if (tag === 'a') {
+        const m = URL_HOST.exec(attrs('href') || '');
+        if (m && rulesForHost(rules, m[1]).some(rule => ruleHolds(el, rule, attrs))) {
+            return true;
+        }
+    }
+    const pre = rules.prefilter[tag];
+    if (pre && pre.test(attrs(mainAttr(tag)) || '') && rules.loose[tag].some(rule => ruleHolds(el, rule, attrs))) {
+        return true;
+    }
+    return rules.alwaysAttrs[tag].some(a => el.hasAttribute(a)) && rules.always[tag].some(rule => ruleHolds(el, rule, attrs));
+}
+
+// Найденное по спискам — на всё время страницы: признак «сеть» у слота
+// сверяется с ним, а не ищется в каждом слоте заново.
+const listHits = new Set();
+
+// Поиск в scope (проход общего механизма, main.js candidates).
+function findListAddress(scope) {
+    const rules = rulesHere();
+    if (!rules) {
+        return [];
+    }
+    const out = [];
+    if (!rules.find) {
+        return out;
+    }
+    if (scope.matches && scope.matches(rules.find) && listAddressMatch(scope)) {
+        out.push(scope);
+    }
+    for (const el of scope.querySelectorAll(rules.find)) {
+        if (listAddressMatch(el)) {
+            out.push(el);
+        }
+    }
+    out.forEach(el => listHits.add(el));
+    return out;
+}
+
+// Ссылка внутри текста: вокруг неё в том же абзаце есть свои слова
+// (партнёрская ссылка в статье). Списки прячут и её — предложение
+// рвётся; мы такую не трогаем: она часть текста, а не рекламное место.
+const INLINE_TEXT_AROUND = 20;
+
+function inlineInText(el) {
+    const parent = el.parentElement;
+    if (el.localName !== 'a' || !parent || !el.checkVisibility() || !getComputedStyle(el).display.startsWith('inline')) {
+        return false;
+    }
+    return (parent.textContent || '').trim().length - (el.textContent || '').trim().length > INLINE_TEXT_AROUND;
+}
+
+// След рекламы по списку. Ссылку с картинкой и фрейм наша таблица
+// (listAddressCss) прячет ещё до отрисовки — спрятанные, они и есть
+// видимая реклама. Видимый узел — реклама, если он заметного размера
+// или это ссылка-кнопка не внутри текста. Спрятанная картинка — нет:
+// это может быть пиксель учёта внутри обычной карточки.
+const CREATIVE_MEDIA = 'img, picture, video, iframe, canvas, object, embed';
+
+function listCreative(el) {
+    if (el.checkVisibility()) {
+        if (inlineInText(el)) {
+            return false;
+        }
+        // Строчная ссылка с баннером: её рамка — высотой со строку, а не
+        // с картинку; размер — у самого креатива.
+        return seen(el, AD_MIN_AREA) || (el.localName === 'a' && ((el.textContent || '').trim().length > 2 ||
+            [...el.querySelectorAll(CREATIVE_MEDIA)].some(m => seen(m, AD_MIN_AREA))));
+    }
+    if (el.localName === 'iframe') {
+        return true;
+    }
+    return el.localName === 'a' && Boolean(el.querySelector(CREATIVE_MEDIA));
+}
+
+function listAddressIn(root, visibleOnly = false) {
+    for (const el of listHits) {
+        if (!el.isConnected) {
+            listHits.delete(el);
+            continue;
+        }
+        if ((el === root || root.contains(el)) && (visibleOnly ? listCreative(el) : !inlineInText(el))) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Таблица для ранней вставки: реклама по спискам не появляется вовсе.
+// Только сама реклама — ссылка с картинкой, фрейм, картинка; текстовую
+// ссылку решает проход (inlineInText), а не таблица.
+function listAddressCss() {
+    const rules = rulesHere();
+    if (!rules || !rules.selectors.length) {
+        return '';
+    }
+    const visual = rules.selectors.map(s => (/^a\[/.test(s) && !/>\s*img$/.test(s) ? s + ':has(img, picture, video, iframe, canvas)' : s));
+    return visual.join(',\n') + ' { display: none !important; }';
+}
+
+/* ---------- ссылка учёта по сетевым правилам ---------- */
+
+// Ссылка ведёт на чужой адрес, который сетевые правила блокируют
+// целиком: переход через рекламную систему или счётчик (eye.targetads.io
+// на klerk.ru, 11.10). Свой сайт — не учёт. Ответ — на адрес: ссылок на
+// один адрес много.
+const blockedHostCache = new Map();
+
+function blockedLinkHost(a) {
+    const host = a.hostname;
+    if (!LISTS || !host) {
+        return false;
+    }
+    let answer = blockedHostCache.get(host);
+    if (answer === undefined) {
+        answer = !sameSite(host, location.hostname) && hostSuffixes(host).some(h => bloomHas(LISTS.hosts, h));
+        blockedHostCache.set(host, answer);
+    }
+    return answer;
+}
+
+function blockedLinkIn(root) {
+    if (!LISTS) {
+        return false;
+    }
+    if (root.localName === 'a' && blockedLinkHost(root)) {
+        return true;
+    }
+    for (const a of root.querySelectorAll('a[href]')) {
+        if (blockedLinkHost(a)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // ===== platform/generic/score.js =====
 
 // Решение по слоту — сумма сил признаков (R10, §3). Признаки делятся на
@@ -618,10 +1017,15 @@ function evidence(root, visibleOnly) {
     return {
         network: networkIn(root, visibleOnly),
         orphan: visibleOnly && orphanLabelIn(root),
-        label: labelsDeep(root, visibleOnly).some(label => !isMarkingLabel(label.textContent) || atTextEdge(root, label)),
+        label: labelsDeep(root, visibleOnly).some(label => isPlaceLabel(label.textContent)
+            ? placeCreative(root, visibleOnly)
+            : !isMarkingLabel(label.textContent) || atTextEdge(root, label)),
         // Маркировка — текст: у пустого места его нет.
         marking: visibleOnly && markingIn(root),
         tracking: trackingIn(root),
+        // Ссылка учёта по сетевым правилам движка — дороже, спрашивается
+        // в decide(), только когда может решить.
+        trackedLink: () => blockedLinkIn(root),
         name: nameLevel({
             strong: names.strong > 0,
             cover: Boolean(names.strong && names.outer && covering(names.outer) && !holdsSmallerAd(names.outer)),
@@ -653,6 +1057,12 @@ function score(ev) {
 // реклама, а, например, недогруженная карточка).
 // Причина (reason) — для отчёта: empty, network, label, marking, name.
 function decide(ev, empty) {
+    if (!empty && !ev.tracking && ev.trackedLink) {
+        const before = score(ev).total;
+        if (before < THRESHOLD && before + STRENGTH.tracking >= THRESHOLD && ev.trackedLink()) {
+            ev.tracking = true;
+        }
+    }
     const { total, signals } = score(ev);
     if (empty) {
         return ev.network || ev.label || ev.name ? { reason: 'empty', total, signals } : null;
@@ -835,12 +1245,11 @@ function adUnitFrom(el) {
     return node;
 }
 
-// Кандидаты в слоты от признака, от ближнего к дальнему: элементы
+// Кандидаты в слоты от блока рекламы, от ближнего к дальнему: элементы
 // списков по пути вверх, а если списка нет — самая внешняя обёртка.
-function slotsFor(el) {
+function slotsFrom(unit) {
     const out = [];
-    el = adUnitFrom(el);
-    let node = el;
+    let node = unit;
     for (let i = 0; i <= MAX_LEVELS && node && node !== document.body; i += 1) {
         if (listItem(node)) {
             out.push(node);
@@ -848,14 +1257,65 @@ function slotsFor(el) {
         node = node.parentElement;
     }
     if (!out.length) {
-        out.push(outermostAlone(el));
+        out.push(outermostAlone(unit));
     }
     return out;
 }
 
+const slotsFor = el => slotsFrom(adUnitFrom(el));
+
+// Слот состоит из рекламы: кроме неё в нём только мелочь — подпись,
+// отступ, кнопка «скрыть». Однотипные соседи бывают и у контейнеров —
+// вкладок, колонок, разделов, где реклама лишь малая часть (Карты, 10.10:
+// три вкладки карточки остановки, в одной — плашка «Кешбэк» среди
+// расписания и адреса; пряталась вся карточка). Такой кандидат — не слот:
+// прячем собственную обёртку рекламы. Текст считаем видимый: спрятанная
+// реклама в слот не входит, а innerText спрятанного узла — весь его
+// исходный текст. Проверяем только решённый слот: innerText не бесплатен,
+// а кандидаты — каждая карточка выдачи.
+const SLOT_OUTSIDE_MIN = 30;
+const renderedText = el => (el.innerText || '').replace(/\s+/g, ' ').trim().length;
+
+function adText(unit) {
+    return unit.checkVisibility()
+        ? renderedText(unit) + shadowRootsIn(unit).reduce((sum, shadow) => sum + shadowText(shadow).length, 0)
+        : 0;
+}
+
+function mostlyAd(root, unit) {
+    if (root === unit) {
+        return true;
+    }
+    const inside = adText(unit);
+    return renderedText(root) - inside <= Math.max(SLOT_OUTSIDE_MIN, inside);
+}
+
 // Предохранители: то, что точно не рекламный слот.
-const NEVER = 'html, body, main, article, nav, header, footer, form, [role="main"], [contenteditable]';
-const HAS_NEVER = 'main, article, nav, form, input, textarea, select, [role="main"], [contenteditable]';
+const NEVER = 'html, body, main, nav, header, footer, form, [role="main"], [contenteditable]';
+const HAS_NEVER = 'main, nav, form, input, textarea, select, [role="main"], [contenteditable]';
+
+// Запись (article) — статья или пост, но рекламная запись тоже article:
+// карточки партнёров в правой панели klerk (11.10), рекламные посты в
+// ленте. Слот с записью прячем только по сильному доказательству (R12):
+// сеть или два независимых класса признаков (имена — словарь сайта — не
+// в счёт), и каждая запись в слоте ведёт к рекламодателю — ссылок мало, и
+// чужих не меньше половины (leadsAway). Статья о рекламе с рубрикой
+// «Реклама» и ссылкой на рекламную систему в тексте ведёт на свой сайт.
+const holdsArticle = root => root.matches('article') || Boolean(root.querySelector('article'));
+
+function articleProof(root, decision) {
+    const strong = new Set(decision.signals.filter(signal => !signal.startsWith('name:')));
+    // Ссылку учёта decide() спрашивает, только когда без неё не хватает
+    // до порога; здесь она — второй независимый признак.
+    if (!strong.has('network') && strong.size === 1 && !strong.has('tracking') && (trackingIn(root) || blockedLinkIn(root))) {
+        strong.add('tracking');
+    }
+    if (!strong.has('network') && strong.size < 2) {
+        return false;
+    }
+    const records = root.matches('article') ? [root] : [...root.querySelectorAll('article')];
+    return records.every(leadsAway);
+}
 
 function safeToCollapse(root, empty) {
     if (root.matches(NEVER) || root.querySelector(HAS_NEVER)) {
@@ -887,7 +1347,7 @@ function bait(root) {
 // место, которое без нас осталось бы пустым (цель №5).
 function hiddenAdTrace(root) {
     for (const el of root.querySelectorAll('*')) {
-        if ((isNetworkNode(el) || nameStrength(el) > 0) && !insideCollapsed(el) && getComputedStyle(el).display === 'none') {
+        if ((isNetworkNode(el) || nameStrength(el) > 0 || (el.matches('a, iframe') && listAddressMatch(el))) && !insideCollapsed(el) && getComputedStyle(el).display === 'none') {
             return true;
         }
     }
@@ -969,6 +1429,9 @@ function verdict(root) {
     // Пустое место — по любому следу, видимый блок — только по видимым
     // (signs.js, «видимость следа»).
     const decision = decide(evidence(root, !empty), empty);
+    if (decision && holdsArticle(root) && !articleProof(root, decision)) {
+        return null;
+    }
     // Видимый блок по одному имени — только с подтверждением (R12): имя —
     // словарь сайта, «ad» в нём значит и рекламу, и раскладку вокруг неё
     // (gazeta.ru ad_branding_footer — подвал, mail.ru …top-line-adv… — письмо).
@@ -1197,6 +1660,21 @@ function emptyCollapsedAbove(node) {
     return null;
 }
 
+// Ранняя таблица по правилам списков (lists.js): вставляется, как только
+// известно, что на сайте мы работаем, — до отрисовки рекламы. Отдельной
+// частью: она не меняется, пересылать её с каждым скрытием незачем.
+let appliedListsCss = '';
+
+function pushListsCss(on) {
+    const css = on ? listAddressCss() : '';
+    if (css === appliedListsCss) {
+        return;
+    }
+    const message = { what: 'ygab:css', part: 'lists', add: css, remove: appliedListsCss };
+    appliedListsCss = css;
+    queue = queue.then(() => chrome.runtime.sendMessage(message)).then(() => {}, () => { /* контекст расширения потерян */ });
+}
+
 function restoreAll() {
     for (const [el, entry] of collapsed) {
         unhideInline(el, entry);
@@ -1204,6 +1682,7 @@ function restoreAll() {
     collapsed.clear();
     collapseLog.length = 0;
     pushCss();
+    pushListsCss(false);
 }
 
 const insideCollapsed = el => {
@@ -1301,11 +1780,14 @@ function explain(root) {
     }
     const empty = !visibleContent(root);
     if (!safeToCollapse(root, empty)) {
-        return { ...out, why: 'предохранитель: контент (main/article/form, много текста или выше 2,5 экрана)' };
+        return { ...out, why: 'предохранитель: контент (main/nav/form, много текста или выше 2,5 экрана)' };
     }
     const ev = evidence(root, !empty);
     const decision = decide(ev, empty);
     const { total, signals } = score(ev);
+    if (decision && holdsArticle(root) && !articleProof(root, decision)) {
+        return { ...out, empty, total, threshold: THRESHOLD, signals, decision: null, why: 'предохранитель: запись (article) — нужны сеть или два признака и ссылки к рекламодателю' };
+    }
     return { ...out, empty, total, threshold: THRESHOLD, signals, decision: decision ? decision.reason : null };
 }
 
@@ -1518,7 +2000,8 @@ function selfCheckReport() {
             size: `${Math.round(r.width)}x${Math.round(r.height)}`,
             text: proseOf(el),
             main: Boolean(main && (el === main || el.contains(main))),
-            adLike: SELFCHECK_AD_TEXT.test(el.textContent || '') || Boolean(el.querySelector('iframe'))
+            // Метка бывает и в закрытом теневом DOM (Поиск Яндекса).
+            adLike: [el.textContent || '', ...shadowRootsIn(el).map(shadowText)].some(text => SELFCHECK_AD_TEXT.test(text)) || Boolean(el.querySelector('iframe'))
         });
     }
     const left = leftoversReport();
@@ -1583,6 +2066,10 @@ function candidates(scope) {
     for (const el of labelsIn(scope)) {
         out.add(el);
     }
+    // Реклама по правилам списков движка (lists.js).
+    for (const el of findListAddress(scope)) {
+        out.add(el);
+    }
     return out;
 }
 
@@ -1616,16 +2103,29 @@ function evaluate(list) {
         if (!el.isConnected || insideCollapsed(el)) {
             continue;
         }
-        for (const root of slotsFor(el)) {
+        const unit = adUnitFrom(el);
+        for (let root of slotsFrom(unit)) {
             if (checked.has(root) || insideCollapsed(root)) {
                 break;
             }
             checked.add(root);
-            const decision = verdict(root);
+            let decision = verdict(root);
+            if (!decision) {
+                continue;
+            }
+            // Контейнер с рекламой — не слот (slots.js, mostlyAd). Отказ — от
+            // этого признака: у ссылки учёта блок рекламы — сама ссылка, а
+            // метка того же объявления даст весь блок, и слот подойдёт.
+            if (!mostlyAd(root, unit)) {
+                checked.delete(root);
+                root = outermostAlone(unit);
+                decision = checked.has(root) || insideCollapsed(root) ? null : verdict(root);
+                checked.add(root);
+            }
             if (decision) {
                 collapse(root, decision, decision.reason === 'empty' && hiddenAdTrace(root));
-                break;
             }
+            break;
         }
     }
     endPass();
@@ -1793,6 +2293,7 @@ function observe() {
 }
 
 function start() {
+    pushListsCss(true);
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', observe, { once: true });
     } else {

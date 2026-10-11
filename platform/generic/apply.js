@@ -208,6 +208,21 @@ function emptyCollapsedAbove(node) {
     return null;
 }
 
+// Ранняя таблица по правилам списков (lists.js): вставляется, как только
+// известно, что на сайте мы работаем, — до отрисовки рекламы. Отдельной
+// частью: она не меняется, пересылать её с каждым скрытием незачем.
+let appliedListsCss = '';
+
+function pushListsCss(on) {
+    const css = on ? listAddressCss() : '';
+    if (css === appliedListsCss) {
+        return;
+    }
+    const message = { what: 'ygab:css', part: 'lists', add: css, remove: appliedListsCss };
+    appliedListsCss = css;
+    queue = queue.then(() => chrome.runtime.sendMessage(message)).then(() => {}, () => { /* контекст расширения потерян */ });
+}
+
 function restoreAll() {
     for (const [el, entry] of collapsed) {
         unhideInline(el, entry);
@@ -215,6 +230,7 @@ function restoreAll() {
     collapsed.clear();
     collapseLog.length = 0;
     pushCss();
+    pushListsCss(false);
 }
 
 const insideCollapsed = el => {

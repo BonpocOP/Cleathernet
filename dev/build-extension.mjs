@@ -25,6 +25,7 @@ import crypto from 'node:crypto';
 import zlib from 'node:zlib';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { checkContract } from './ubol-contract.mjs';
+import { buildLists, injectLists } from './list-signs.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CACHE = path.join(ROOT, 'dev', '.cache');
@@ -316,6 +317,13 @@ fs.cpSync(path.join(ROOT, 'platform'), path.join(OUT, OURS, 'platform'), {
     recursive: true,
     filter: source => path.relative(path.join(ROOT, 'platform'), source) !== 'generic' && path.basename(source) !== 'module.json'
 });
+// Признаки из списков движка (dev/list-signs.mjs) — в собранный бандл
+// общего механизма: данные всегда от той версии движка, что в сборке.
+{
+    const { lists, counts } = buildLists(OUT);
+    injectLists(path.join(OUT, OURS, 'platform', 'bundle', 'generic.js'), lists);
+    console.log(`Признаки из списков: правил по адресу ${counts.address}, исключений для сайтов ${counts.exceptions}, сайтов без общих правил ${counts.nohide}, адресов в фильтре ${counts.hosts} (места перехода, не учёт: ${counts.destinations.join(", ") || "—"})`);
+}
 // Значок на панели: движок сам ставит свои img/icon_*.png (обычную и
 // серую _off для выключенного сайта) — кладём на их место наши. Код движка
 // не трогаем, только картинки.

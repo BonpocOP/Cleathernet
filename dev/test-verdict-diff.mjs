@@ -14,7 +14,7 @@
 // хранятся — каких нет, те пропускаются) и все образцы test/fixtures/private/snippets
 // (вырезаны из страниц, присланных пользователями, — в git не попадают).
 //
-//   node test-verdict-diff.mjs [--base <коммит>]
+//   node test-verdict-diff.mjs [--base <коммит>] [--page <файл.html>]
 
 import { chromium } from 'playwright';
 import { browserOptions } from './browser.mjs';
@@ -22,6 +22,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { buildLists, LISTS_PLACEHOLDER } from './list-signs.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const bi = process.argv.indexOf('--base');
@@ -42,35 +43,73 @@ function candidates(scope) {
     // Номера блоков — с этапа 4.
     if (typeof BLOCK_ID_NODES !== 'undefined') for (const el of scope.querySelectorAll(BLOCK_ID_NODES)) if (isBlockId(el)) out.add(el);
     for (const el of labelsIn(scope)) out.add(el);
+    // Признаки из списков движка — с 11.10.
+    if (typeof findListAddress !== 'undefined') for (const el of findListAddress(scope)) out.add(el);
     return out;
 }`;
 
 // Файлы механизма по order.json своей версии, без main.js (он запускается
 // сам). verdict() до этапа 3 отдавал причину строкой, после — объект:
-// сравниваем причину.
+// сравниваем причину. Данные списков (lists.js) в исходниках — заглушка,
+// их вклеивает сборка: без них признаки из списков молчат и сравнение их
+// не видит. Берём из наборов последней сборки (build/extension).
 function copy(name, read) {
     const order = JSON.parse(read('platform/generic/order.json')).filter(file => file !== 'main.js');
-    const body = order.map(file => read('platform/generic/' + file)).join('\n');
+    const body = order.map(file => read('platform/generic/' + file)).join('\n')
+        .replace(LISTS_PLACEHOLDER, () => `const LISTS = ${JSON.stringify(listData())};`);
     return `window.${name} = (() => {\n'use strict';\n${body}\n${HARNESS}\nreturn { candidates, slotsFor, verdict: root => (d => (d && typeof d === 'object' ? d.reason : d))(verdict(root)), beginPass, endPass, nameStrength, NETWORK_NODES };\n})();`;
+}
+
+let lists;
+function listData() {
+    if (!lists) {
+        const out = path.join(ROOT, 'build', 'extension');
+        if (!fs.existsSync(path.join(out, 'rulesets'))) {
+            throw new Error('Нет сборки build/extension — сначала npm run build:ext');
+        }
+        const built = buildLists(out);
+        console.log(`Списки: правил по адресу ${built.counts.address}, адресов ${built.counts.hosts}`);
+        lists = built.lists;
+    }
+    return lists;
 }
 
 const OLD = copy('__old', fromGit);
 const NEW = copy('__new', fromDisk);
 
-// Страницы.
+// Страницы. --page <файл> [--url <адрес>] — только этот файл (проверить на
+// заведомом примере). Страница открывается по своему адресу, если он
+// известен: от адреса зависят исключения списков для сайта и «своя» или
+// «чужая» ссылка (11.10: под diff.example на ria.ru срабатывали правила,
+// которые авторы списков для ria.ru отключили).
+const DEFAULT_URL = 'https://diff.example/page';
 const pages = [];
-for (const dir of ['test/fixtures/raw/pages', 'test/fixtures/raw/pages/gb']) {
+const pi = process.argv.indexOf('--page');
+const ui = process.argv.indexOf('--url');
+if (pi !== -1) {
+    pages.push({ id: path.basename(process.argv[pi + 1]), html: fs.readFileSync(process.argv[pi + 1], 'utf8'), url: ui === -1 ? DEFAULT_URL : process.argv[ui + 1] });
+}
+for (const dir of pi !== -1 ? [] : ['test/fixtures/raw/pages', 'test/fixtures/raw/pages/gb']) {
     const abs = path.join(ROOT, dir);
     if (!fs.existsSync(abs)) continue;
     for (const name of fs.readdirSync(abs).filter(n => n.endsWith('.html'))) {
-        pages.push({ id: `${dir.endsWith('gb') ? 'gb/' : ''}${name}`, html: fs.readFileSync(path.join(abs, name), 'utf8') });
+        pages.push({ id: `${dir.endsWith('gb') ? 'gb/' : ''}${name}`, html: fs.readFileSync(path.join(abs, name), 'utf8'), url: DEFAULT_URL });
+    }
+}
+// Набор обычных страниц (test-fp): адреса — в index.json.
+const FP = path.join(ROOT, 'test', 'fixtures', 'raw', 'fp');
+const fpIndex = pi === -1 && fs.existsSync(path.join(FP, 'index.json')) ? JSON.parse(fs.readFileSync(path.join(FP, 'index.json'), 'utf8')) : {};
+for (const [id, { url }] of Object.entries(fpIndex)) {
+    const file = path.join(FP, id + '.html');
+    if (fs.existsSync(file)) {
+        pages.push({ id: 'fp/' + id, html: fs.readFileSync(file, 'utf8'), url });
     }
 }
 const SNIPPETS = path.join(ROOT, 'test', 'fixtures', 'private', 'snippets');
-for (const name of fs.existsSync(SNIPPETS) ? fs.readdirSync(SNIPPETS).filter(n => n.endsWith('.html')) : []) {
+for (const name of pi === -1 && fs.existsSync(SNIPPETS) ? fs.readdirSync(SNIPPETS).filter(n => n.endsWith('.html')) : []) {
     const body = fs.readFileSync(path.join(SNIPPETS, name), 'utf8').replace(/^<!--[\s\S]*?-->\s*/, '');
     const list = /^\s*<li/i.test(body) ? `<ul>${body}<li>обычный пункт списка</li><li>ещё пункт</li></ul>` : body;
-    pages.push({ id: 'snippet/' + name, html: `<!doctype html><html lang="ru"><head><meta charset="utf-8"></head><body><p>Страница с образцом</p>${list}<p>Текст после</p></body></html>` });
+    pages.push({ id: 'snippet/' + name, url: DEFAULT_URL, html: `<!doctype html><html lang="ru"><head><meta charset="utf-8"></head><body><p>Страница с образцом</p>${list}<p>Текст после</p></body></html>` });
 }
 
 // В странице: обе копии судят одни и те же слоты.
@@ -82,7 +121,8 @@ function compare() {
     window.__new.beginPass();
     for (const el of cands) {
         out.candidates += 1;
-        for (const root of window.__old.slotsFor(el)) {
+        // Слоты — объединение обеих копий: правка slots.js тоже меняет решения.
+        for (const root of new Set([...window.__old.slotsFor(el), ...window.__new.slotsFor(el)])) {
             if (seen.has(root)) continue;
             seen.add(root);
             out.roots += 1;
@@ -119,18 +159,18 @@ function neighborHides() {
 const browser = await chromium.launch({ ...browserOptions(), headless: true });
 const context = await browser.newContext({ viewport: { width: 1600, height: 900 }, locale: 'ru-RU' });
 let current = null;
-await context.route('**/*', route => (route.request().url() === 'https://diff.example/page' && current
-    ? route.fulfill({ contentType: 'text/html; charset=utf-8', body: current })
+await context.route('**/*', route => (current && route.request().url() === current.url
+    ? route.fulfill({ contentType: 'text/html; charset=utf-8', body: current.html })
     : route.abort()));
 
 let failed = 0;
 let totals = { roots: 0, hiddenOld: 0, hiddenNew: 0 };
 try {
     for (const p of pages) {
-        current = p.html;
+        current = p;
         const tab = await context.newPage();
         try {
-            await tab.goto('https://diff.example/page', { waitUntil: 'load', timeout: 60000 });
+            await tab.goto(p.url, { waitUntil: 'load', timeout: 60000 });
             await tab.waitForTimeout(500);
             await tab.addScriptTag({ content: OLD });
             await tab.addScriptTag({ content: NEW });

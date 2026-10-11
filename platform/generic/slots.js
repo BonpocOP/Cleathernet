@@ -167,12 +167,11 @@ function adUnitFrom(el) {
     return node;
 }
 
-// Кандидаты в слоты от признака, от ближнего к дальнему: элементы
+// Кандидаты в слоты от блока рекламы, от ближнего к дальнему: элементы
 // списков по пути вверх, а если списка нет — самая внешняя обёртка.
-function slotsFor(el) {
+function slotsFrom(unit) {
     const out = [];
-    el = adUnitFrom(el);
-    let node = el;
+    let node = unit;
     for (let i = 0; i <= MAX_LEVELS && node && node !== document.body; i += 1) {
         if (listItem(node)) {
             out.push(node);
@@ -180,14 +179,65 @@ function slotsFor(el) {
         node = node.parentElement;
     }
     if (!out.length) {
-        out.push(outermostAlone(el));
+        out.push(outermostAlone(unit));
     }
     return out;
 }
 
+const slotsFor = el => slotsFrom(adUnitFrom(el));
+
+// Слот состоит из рекламы: кроме неё в нём только мелочь — подпись,
+// отступ, кнопка «скрыть». Однотипные соседи бывают и у контейнеров —
+// вкладок, колонок, разделов, где реклама лишь малая часть (Карты, 10.10:
+// три вкладки карточки остановки, в одной — плашка «Кешбэк» среди
+// расписания и адреса; пряталась вся карточка). Такой кандидат — не слот:
+// прячем собственную обёртку рекламы. Текст считаем видимый: спрятанная
+// реклама в слот не входит, а innerText спрятанного узла — весь его
+// исходный текст. Проверяем только решённый слот: innerText не бесплатен,
+// а кандидаты — каждая карточка выдачи.
+const SLOT_OUTSIDE_MIN = 30;
+const renderedText = el => (el.innerText || '').replace(/\s+/g, ' ').trim().length;
+
+function adText(unit) {
+    return unit.checkVisibility()
+        ? renderedText(unit) + shadowRootsIn(unit).reduce((sum, shadow) => sum + shadowText(shadow).length, 0)
+        : 0;
+}
+
+function mostlyAd(root, unit) {
+    if (root === unit) {
+        return true;
+    }
+    const inside = adText(unit);
+    return renderedText(root) - inside <= Math.max(SLOT_OUTSIDE_MIN, inside);
+}
+
 // Предохранители: то, что точно не рекламный слот.
-const NEVER = 'html, body, main, article, nav, header, footer, form, [role="main"], [contenteditable]';
-const HAS_NEVER = 'main, article, nav, form, input, textarea, select, [role="main"], [contenteditable]';
+const NEVER = 'html, body, main, nav, header, footer, form, [role="main"], [contenteditable]';
+const HAS_NEVER = 'main, nav, form, input, textarea, select, [role="main"], [contenteditable]';
+
+// Запись (article) — статья или пост, но рекламная запись тоже article:
+// карточки партнёров в правой панели klerk (11.10), рекламные посты в
+// ленте. Слот с записью прячем только по сильному доказательству (R12):
+// сеть или два независимых класса признаков (имена — словарь сайта — не
+// в счёт), и каждая запись в слоте ведёт к рекламодателю — ссылок мало, и
+// чужих не меньше половины (leadsAway). Статья о рекламе с рубрикой
+// «Реклама» и ссылкой на рекламную систему в тексте ведёт на свой сайт.
+const holdsArticle = root => root.matches('article') || Boolean(root.querySelector('article'));
+
+function articleProof(root, decision) {
+    const strong = new Set(decision.signals.filter(signal => !signal.startsWith('name:')));
+    // Ссылку учёта decide() спрашивает, только когда без неё не хватает
+    // до порога; здесь она — второй независимый признак.
+    if (!strong.has('network') && strong.size === 1 && !strong.has('tracking') && (trackingIn(root) || blockedLinkIn(root))) {
+        strong.add('tracking');
+    }
+    if (!strong.has('network') && strong.size < 2) {
+        return false;
+    }
+    const records = root.matches('article') ? [root] : [...root.querySelectorAll('article')];
+    return records.every(leadsAway);
+}
 
 function safeToCollapse(root, empty) {
     if (root.matches(NEVER) || root.querySelector(HAS_NEVER)) {
@@ -219,7 +269,7 @@ function bait(root) {
 // место, которое без нас осталось бы пустым (цель №5).
 function hiddenAdTrace(root) {
     for (const el of root.querySelectorAll('*')) {
-        if ((isNetworkNode(el) || nameStrength(el) > 0) && !insideCollapsed(el) && getComputedStyle(el).display === 'none') {
+        if ((isNetworkNode(el) || nameStrength(el) > 0 || (el.matches('a, iframe') && listAddressMatch(el))) && !insideCollapsed(el) && getComputedStyle(el).display === 'none') {
             return true;
         }
     }
@@ -301,6 +351,9 @@ function verdict(root) {
     // Пустое место — по любому следу, видимый блок — только по видимым
     // (signs.js, «видимость следа»).
     const decision = decide(evidence(root, !empty), empty);
+    if (decision && holdsArticle(root) && !articleProof(root, decision)) {
+        return null;
+    }
     // Видимый блок по одному имени — только с подтверждением (R12): имя —
     // словарь сайта, «ad» в нём значит и рекламу, и раскладку вокруг неё
     // (gazeta.ru ad_branding_footer — подвал, mail.ru …top-line-adv… — письмо).

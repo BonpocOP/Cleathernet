@@ -84,11 +84,14 @@ function explain(root) {
     }
     const empty = !visibleContent(root);
     if (!safeToCollapse(root, empty)) {
-        return { ...out, why: 'предохранитель: контент (main/article/form, много текста или выше 2,5 экрана)' };
+        return { ...out, why: 'предохранитель: контент (main/nav/form, много текста или выше 2,5 экрана)' };
     }
     const ev = evidence(root, !empty);
     const decision = decide(ev, empty);
     const { total, signals } = score(ev);
+    if (decision && holdsArticle(root) && !articleProof(root, decision)) {
+        return { ...out, empty, total, threshold: THRESHOLD, signals, decision: null, why: 'предохранитель: запись (article) — нужны сеть или два признака и ссылки к рекламодателю' };
+    }
     return { ...out, empty, total, threshold: THRESHOLD, signals, decision: decision ? decision.reason : null };
 }
 
@@ -301,7 +304,8 @@ function selfCheckReport() {
             size: `${Math.round(r.width)}x${Math.round(r.height)}`,
             text: proseOf(el),
             main: Boolean(main && (el === main || el.contains(main))),
-            adLike: SELFCHECK_AD_TEXT.test(el.textContent || '') || Boolean(el.querySelector('iframe'))
+            // Метка бывает и в закрытом теневом DOM (Поиск Яндекса).
+            adLike: [el.textContent || '', ...shadowRootsIn(el).map(shadowText)].some(text => SELFCHECK_AD_TEXT.test(text)) || Boolean(el.querySelector('iframe'))
         });
     }
     const left = leftoversReport();

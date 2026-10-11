@@ -1,0 +1,31 @@
+# Популярные места перехода (dev/list-signs.mjs): ссылка на них — не
+# «ссылка учёта», даже если сетевые правила списков блокируют адрес как
+# ресурс (виджеты, скрипты партнёрских программ: sravni.ru в RU AdList,
+# clck.ru у Peter Lowe), и фильтр адресов не должен на них ошибаться
+# (dzen.ru, 11.10). Только публичные адреса сайтов; по одному в строке.
+vk.com m.vk.com vk.ru vk.cc vkvideo.ru ok.ru ok.me
+mail.ru e.mail.ru cloud.mail.ru news.mail.ru go.mail.ru my.mail.ru
+dzen.ru ya.ru yandex.ru market.yandex.ru music.yandex.ru disk.yandex.ru maps.yandex.ru
+eda.yandex.ru taxi.yandex.ru passport.yandex.ru clck.ru kinopoisk.ru
+t.me telegram.me telegram.org wa.me whatsapp.com max.ru
+rutube.ru youtube.com www.youtube.com youtu.be
+google.com www.google.com docs.google.com drive.google.com play.google.com
+apps.apple.com apple.com microsoft.com github.com gitlab.com
+wikipedia.org ru.wikipedia.org habr.com pikabu.ru
+avito.ru hh.ru ozon.ru www.ozon.ru wildberries.ru www.wildberries.ru
+aliexpress.ru aliexpress.com amazon.com ebay.com megamarket.ru lamoda.ru
+gosuslugi.ru www.gosuslugi.ru nalog.gov.ru mos.ru
+sberbank.ru www.sberbank.ru online.sberbank.ru tbank.ru tinkoff.ru vtb.ru alfabank.ru raiffeisen.ru
+rbc.ru ria.ru lenta.ru tass.ru kommersant.ru vedomosti.ru gazeta.ru kp.ru mk.ru aif.ru rambler.ru
+vc.ru dtf.ru sports.ru championat.com gismeteo.ru
+2gis.ru drom.ru auto.ru cian.ru domclick.ru sravni.ru banki.ru irecommend.ru otzovik.com
+livejournal.com twitch.tv twitter.com x.com t.co facebook.com instagram.com linkedin.com lnkd.in
+reddit.com tiktok.com pinterest.com
+bit.ly goo.gl tinyurl.com cutt.ly is.gd
+3dnews.ru ixbt.com overclockers.ru dns-shop.ru mvideo.ru eldorado.ru citilink.ru
+samokat.ru vkusvill.ru detmir.ru apteka.ru eapteka.ru
+tutu.ru rzd.ru aeroflot.ru pobeda.aero ostrovok.ru booking.com tripadvisor.ru afisha.ru kassir.ru
+stackoverflow.com developer.mozilla.org npmjs.com zoom.us skype.com discord.com discord.gg
+spotify.com soundcloud.com steamcommunity.com store.steampowered.com
+litres.ru ivi.ru okko.tv start.ru wink.ru premier.one kion.ru more.tv
+klerk.ru

@@ -21,8 +21,16 @@
 //
 // Яндекс и Авито автоматическим браузером не открываем; сайты с geo: ru —
 // только с российского IP (--geo-ru), иначе их реклама и счётчики другие.
+// С российского IP часть сайтов закрыта (YouTube): их не берём, а сайт,
+// который ни в одном браузере не открылся с первого прохода, пропускаем.
+// Каждый шаг ограничен по времени: 10.10 YouTube из России не открылся,
+// снятие показателей с повисшей вкладки ждало больше часа, и браузеры
+// перестали открывать вкладки. Упавший браузер перезапускается.
 //
-//   node perf-rulesets.mjs [--runs 3] [--limit N] [--only <часть адреса>] [--geo-ru]
+// --resume — продолжить с места обрыва: сайты из perf-rulesets.raw.json,
+// уже измеренные с тем же --geo-ru и теми же наборами, не перемеряются.
+//
+//   node perf-rulesets.mjs [--runs 3] [--limit N] [--only <часть адреса>] [--geo-ru] [--resume]
 
 import { chromium } from 'playwright';
 import { browserOptions } from './browser.mjs';
@@ -44,11 +52,16 @@ const RUNS = Number(arg('--runs', 3));
 const LIMIT = Number(arg('--limit', 0));
 const ONLY = arg('--only', null);
 const GEO_RU = process.argv.includes('--geo-ru');
+const RESUME = process.argv.includes('--resume');
 const MIN_WINDOW_MS = 15000;
 const MAX_WINDOW_MS = 45000;
 const SETTLE_MS = 3000;
 const NAV_TIMEOUT = 30000;
 const MIN_TEXT = 200;
+// Потолок на шаг, который может повиснуть вместе со страницей.
+const STEP_TIMEOUT = 10000;
+// Закрыты для российского IP — замер там бессмыслен.
+const RU_BLOCKED = /(^|\.)(youtube\.com)$/;
 // Проверка «вы робот?» вместо сайта — такой проход не считаем.
 const CAPTCHA = /проверк|captcha|robot|робот|access denied|доступ ограничен/i;
 
@@ -65,6 +78,7 @@ const corpus = JSON.parse(await fs.readFile(path.join(ROOT, 'test', 'corpus.json
 let sites = corpus.sites
     .filter(s => !/(^|\.)(yandex\.ru|ya\.ru|avito\.ru)$/.test(new URL(s.url).hostname))
     .filter(s => GEO_RU || s.geo !== 'ru')
+    .filter(s => !GEO_RU || !RU_BLOCKED.test(new URL(s.url).hostname))
     .filter(s => !ONLY || s.url.includes(ONLY));
 if (LIMIT) sites = sites.slice(0, LIMIT);
 
@@ -74,6 +88,11 @@ const median = list => {
     const mid = sorted.length >> 1;
     return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
 };
+
+const withTimeout = (promise, ms, what) => Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error(`${what}: нет ответа за ${ms / 1000} с`)), ms))
+]);
 
 // Длинные задачи — с самого начала загрузки.
 const longTaskProbe = () => {
@@ -117,12 +136,14 @@ async function launch(config) {
 }
 
 async function measure(browser, url) {
-    const page = await browser.context.newPage();
-    const cdp = await browser.context.newCDPSession(page);
-    await cdp.send('Network.enable');
-    await cdp.send('Network.setCacheDisabled', { cacheDisabled: true });
-    await cdp.send('Performance.enable');
-    await page.addInitScript(longTaskProbe);
+    const page = await withTimeout(browser.context.newPage(), STEP_TIMEOUT, 'новая вкладка');
+    const cdp = await withTimeout(browser.context.newCDPSession(page), STEP_TIMEOUT, 'CDP');
+    await withTimeout(Promise.all([
+        cdp.send('Network.enable'),
+        cdp.send('Network.setCacheDisabled', { cacheDisabled: true }),
+        cdp.send('Performance.enable'),
+        page.addInitScript(longTaskProbe)
+    ]), STEP_TIMEOUT, 'настройка вкладки');
     const net = { sent: 0, blocked: 0, failed: 0, bytes: 0 };
     cdp.on('Network.requestWillBeSent', () => { net.sent += 1; });
     cdp.on('Network.loadingFinished', e => { net.bytes += e.encodedDataLength || 0; });
@@ -147,8 +168,8 @@ async function measure(browser, url) {
     await page.waitForTimeout(Math.min(left(), Math.max(SETTLE_MS, MIN_WINDOW_MS - (Date.now() - t0))));
     out.windowMs = Date.now() - t0;
     try {
-        const metrics = Object.fromEntries((await cdp.send('Performance.getMetrics')).metrics.map(m => [m.name, m.value]));
-        const page_ = await page.evaluate(() => {
+        const metrics = Object.fromEntries((await withTimeout(cdp.send('Performance.getMetrics'), STEP_TIMEOUT, 'показатели')).metrics.map(m => [m.name, m.value]));
+        const page_ = await withTimeout(page.evaluate(() => {
             const nav = performance.getEntriesByType('navigation')[0];
             const tasks = window.__longTasks || [];
             return {
@@ -156,9 +177,10 @@ async function measure(browser, url) {
                 dcl: nav ? Math.round(nav.domContentLoadedEventEnd) : null,
                 tbt: Math.round(tasks.reduce((sum, d) => sum + Math.max(0, d - 50), 0)),
                 text: (document.body && document.body.innerText || '').length,
-                title: document.title.slice(0, 60)
+                // mail.ru: document.title бывает null (страница его подменяет).
+                title: String(document.title || '').slice(0, 60)
             };
-        });
+        }), STEP_TIMEOUT, 'данные страницы');
         Object.assign(out, page_, {
             requests: net.sent - net.blocked,
             blocked: net.blocked,
@@ -180,8 +202,29 @@ async function measure(browser, url) {
         out.ok = false;
         out.error = out.error || String(e.message || e).split('\n')[0].slice(0, 120);
     }
-    await page.close().catch(() => {});
+    await withTimeout(page.close(), STEP_TIMEOUT, 'закрытие вкладки').catch(() => {});
     return out;
+}
+
+// Замер в одном браузере; браузер, который не открывает вкладку или
+// повис, перезапускается, и замер повторяется один раз.
+async function measureSafe(index, url) {
+    for (let attempt = 0; ; attempt += 1) {
+        try {
+            return await withTimeout(measure(browsers[index], url), MAX_WINDOW_MS + 4 * STEP_TIMEOUT, 'замер');
+        } catch (e) {
+            const error = String(e.message || e).split('\n')[0].slice(0, 120);
+            console.log(`  ${browsers[index].id}: ${error} — перезапуск браузера`);
+            await closeBrowser(browsers[index]);
+            browsers[index] = await launch(CONFIGS[index]);
+            if (attempt >= 1) return { ok: false, error };
+        }
+    }
+}
+
+async function closeBrowser(browser) {
+    await withTimeout(browser.context.close(), STEP_TIMEOUT, 'закрытие браузера').catch(() => {});
+    await fs.rm(browser.profile, { recursive: true, force: true }).catch(() => {});
 }
 
 const started = Date.now();
@@ -193,26 +236,55 @@ for (const config of CONFIGS) {
 }
 console.log(`  наборы «как сейчас»: ${browsers[0].rulesets.join(', ')}`);
 
+const RAW_FILE = path.join(OUT_DIR, 'perf-rulesets.raw.json');
 const raw = {};
+const unreachable = {};
+if (RESUME) {
+    // Берём только то, что мерилось так же. Сайт без единого удачного
+    // прохода «как сейчас»: ответил капчей или пустой страницей —
+    // недоступен, иначе (ошибка самого замера) — перемеряем.
+    const prev = JSON.parse(await fs.readFile(RAW_FILE, 'utf8').catch(() => '{}'));
+    const sameConfigs = JSON.stringify((prev.configs || []).map(c => c.id)) === JSON.stringify(CONFIGS.map(c => c.id));
+    if (prev.raw && prev.geoRu === GEO_RU && sameConfigs) {
+        Object.assign(unreachable, prev.unreachable || {});
+        for (const [url, byConfig] of Object.entries(prev.raw)) {
+            const base = byConfig.base || [];
+            if (base.some(r => r.ok)) raw[url] = byConfig;
+            else if (base.length && base.every(r => /^капча|не показала текст/.test(r.error || ''))) unreachable[url] = base[0].error;
+        }
+        console.log(`Продолжение: уже измерено ${Object.keys(raw).length}, недоступно ${Object.keys(unreachable).length}`);
+    } else {
+        console.log('Продолжать нечего: прошлый замер шёл в других условиях — начинаю заново');
+    }
+}
+const saveRaw = () => fs.writeFile(RAW_FILE, JSON.stringify({ date: new Date().toISOString(), runs: RUNS, geoRu: GEO_RU, window: { minMs: MIN_WINDOW_MS, maxMs: MAX_WINDOW_MS, settleMs: SETTLE_MS }, configs: CONFIGS, baseRulesets: browsers[0].rulesets, raw, unreachable }, null, 2));
+
 try {
     for (const [index, site] of sites.entries()) {
-        raw[site.url] = Object.fromEntries(CONFIGS.map(c => [c.id, []]));
+        if (raw[site.url] || unreachable[site.url]) continue;
+        const byConfig = Object.fromEntries(CONFIGS.map(c => [c.id, []]));
         for (let run = 0; run < RUNS; run += 1) {
-            const results = await Promise.all(browsers.map(browser => measure(browser, site.url)));
-            browsers.forEach((browser, i) => raw[site.url][browser.id].push(results[i]));
+            const results = await Promise.all(browsers.map((_, i) => measureSafe(i, site.url)));
+            browsers.forEach((browser, i) => byConfig[browser.id].push(results[i]));
+            // Ни один браузер не открыл — сайт закрыт или лежит; остальные проходы не ждём.
+            if (run === 0 && results.every(r => !r.ok)) break;
         }
-        const base = median(raw[site.url].base.map(r => r.scriptMs));
         const minutes = Math.round((Date.now() - started) / 60000);
+        if (Object.values(byConfig).every(runs => runs.every(r => !r.ok))) {
+            unreachable[site.url] = byConfig.base[0].error || 'не открылся';
+            console.log(`[${index + 1}/${sites.length}, ${minutes} мин] ${site.url}: не открылся (${unreachable[site.url]}) — пропускаю`);
+            await saveRaw();
+            continue;
+        }
+        raw[site.url] = byConfig;
+        const base = median(byConfig.base.map(r => r.scriptMs));
         console.log(`[${index + 1}/${sites.length}, ${minutes} мин] ${site.url}: скрипты ${base} мс, ` +
             CONFIGS.slice(1).map(c => `${c.id} ${median(raw[site.url][c.id].map(r => r.scriptMs))}`).join(', '));
-        // Промежуточный результат — на случай обрыва.
-        await fs.writeFile(path.join(OUT_DIR, 'perf-rulesets.raw.json'), JSON.stringify({ date: new Date().toISOString(), runs: RUNS, window: { minMs: MIN_WINDOW_MS, maxMs: MAX_WINDOW_MS, settleMs: SETTLE_MS }, configs: CONFIGS, baseRulesets: browsers[0].rulesets, raw }, null, 2));
+        // Промежуточный результат — на случай обрыва (продолжить: --resume).
+        await saveRaw();
     }
 } finally {
-    for (const browser of browsers) {
-        await browser.context.close().catch(() => {});
-        await fs.rm(browser.profile, { recursive: true, force: true }).catch(() => {});
-    }
+    for (const browser of browsers) await closeBrowser(browser);
 }
 
 // ---------- сводка ----------
@@ -264,7 +336,7 @@ for (const config of CONFIGS.slice(1)) {
     };
 }
 
-await fs.writeFile(path.join(OUT_DIR, 'perf-rulesets.json'), JSON.stringify({ date: new Date().toISOString(), runs: RUNS, window: { minMs: MIN_WINDOW_MS, maxMs: MAX_WINDOW_MS, settleMs: SETTLE_MS }, baseRulesets: browsers[0].rulesets, summary, perSite }, null, 2));
+await fs.writeFile(path.join(OUT_DIR, 'perf-rulesets.json'), JSON.stringify({ date: new Date().toISOString(), runs: RUNS, geoRu: GEO_RU, window: { minMs: MIN_WINDOW_MS, maxMs: MAX_WINDOW_MS, settleMs: SETTLE_MS }, baseRulesets: browsers[0].rulesets, summary, perSite, unreachable }, null, 2));
 
 const f = v => (v === null || v === undefined ? '—' : (v > 0 ? '+' : '') + v.toFixed(1) + '%');
 console.log('\nИзменение относительно «как сейчас» (медиана по сайтам / среднее):');

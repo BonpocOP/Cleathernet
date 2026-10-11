@@ -234,7 +234,22 @@ const avitoDevelopments = async () => page('Новостройки в Москв
 
 // Яндекс Карты, карточка остановки (10.10): плашка «Кешбэк 20%» со значком
 // «Реклама» над расписанием и адресом остановки (адрес выдуман).
-const yandexMapsStop = async ({ neighbor = false } = {}) => page('Примерная улица, остановка — Яндекс Карты',
+// tabs — как на живой странице (report7/report10, 10.10): содержимое
+// карточки во вкладке, рядом ещё две пустые вкладки того же класса. Три
+// однотипных соседа — не список рекламных мест: вкладка — контейнер, в
+// котором плашка лишь малая часть, а не слот (пряталась вся карточка).
+// later — плашка приходит после загрузки, как у Карт.
+const yandexMapsStop = async ({ neighbor = false, tabs = false, later = false } = {}) => {
+    const banner = await snippet('yandex-maps-offer-banner.html');
+    const content = `${later ? '<div id="banner-slot"></div>' : banner}
+       <div class="schedule"><b>Расписание</b><p>Пока нет информации</p></div>
+       <div class="address"><b>Адрес</b><p><a href="/maps/213/moscow/geo/primernaya_ulitsa/1/">Москва, Примерная улица</a></p></div>` +
+        (tabs ? `
+       <div class="routes"><b>Транспорт</b><p>Автобусы 12, 34, 56 — до вокзала и рынка. Трамвай 7 — до парка. Ближайшие остановки: Школа, Почта, Рынок.</p></div>` : '');
+    const body = tabs
+        ? `<div class="tabs-view"><div class="business-tab-wrapper _materialized"><div class="business-tab-wrapper__content"><div>${content}</div></div></div><div class="business-tab-wrapper"><div class="business-tab-wrapper__content"></div></div><div class="business-tab-wrapper"><div class="business-tab-wrapper__content"></div></div></div>`
+        : content;
+    return page('Примерная улица, остановка — Яндекс Карты',
     `body{margin:0;font:14px Arial,sans-serif;color:#000}` +
     // Сосед или движок спрятал только значок «Реклама» (так делает RU AdList
     // при повторном заходе) — плашка осталась без пометки.
@@ -243,13 +258,48 @@ const yandexMapsStop = async ({ neighbor = false } = {}) => page('Примерн
      .sidebar-view{width:420px;padding:0 20px;background:#fff}
      .banner-preview-view__preview{display:flex;align-items:center;gap:12px;padding:12px;border-radius:12px;background:#f4f5f7}
      .banner-preview-view__icon{width:40px;height:40px;border-radius:8px;background-color:#fc3f1d}
-     .schedule,.address{padding:16px 0;border-bottom:1px solid #eee}
+     .schedule,.address,.routes{padding:16px 0;border-bottom:1px solid #eee}
      .map{position:fixed;left:460px;top:0;right:0;bottom:0;background-image:linear-gradient(#e8eef0,#dfe7ea)}`,
     `<div class="sidebar-view">
-       ${await snippet('yandex-maps-offer-banner.html')}
-       <div class="schedule"><b>Расписание</b><p>Пока нет информации</p></div>
-       <div class="address"><b>Адрес</b><p><a href="/maps/213/moscow/geo/primernaya_ulitsa/1/">Москва, Примерная улица</a></p></div>
-     </div><div class="map" title="карта — фон с градиентом, как картинка: не пустое место"></div>`);
+       ${body}
+     </div><div class="map" title="карта — фон с градиентом, как картинка: не пустое место"></div>` +
+    (later ? `<template id="banner-later">${banner}</template>
+     <script>addEventListener('load', () => setTimeout(() => document.getElementById('banner-slot').replaceWith(document.getElementById('banner-later').content.cloneNode(true)), 1000));</script>` : ''));
+};
+
+// Поиск Яндекса, подсказки под строкой поиска (10.10, report8): реклама —
+// пункт-сайт с меткой «Реклама», ссылка ведёт через счётчик самого
+// Яндекса (yandex.ru/search/_sttc/…) — то есть на свой же сайт. Классы —
+// как в разметке подсказок, тексты и адреса выдуманы. Рядом — обычная
+// подсказка-сайт без метки и ссылка «Реклама» в подвале на свой раздел:
+// это навигация, её не трогаем. later — подсказки появляются, когда
+// человек набирает запрос.
+const SUGGEST = 'tQD6uEcebtbHiJ5yp';
+const yandexSuggest = async ({ later = false, ad = true } = {}) => {
+    const text = q => `<li class="${SUGGEST}__item ${SUGGEST}__item_type_fulltext" role="option" data-text="${q}"><a class="${SUGGEST}__item-link" href="https://yandex.ru/search/?text=${encodeURIComponent(q)}"><span class="${SUGGEST}__item-text">${q}</span></a></li>`;
+    const nav = (title, host, label) => `<li class="${SUGGEST}__item ${SUGGEST}__item_type_nav ${SUGGEST}__item_with-button" data-type="nav" role="option"><a href="${label ? 'https://yandex.ru/search/_sttc/q13m5801y/abc0ebRSO/0CJnS7' : 'https://' + host + '/'}" target="_blank" rel="noopener" class="${SUGGEST}__item-link"><span class="${SUGGEST}__a11y_description">внешняя ссылка</span><div class="${SUGGEST}__item-thumb"><div class="${SUGGEST}__item-thumb-img" style="background-image:url(https://favicon.yandex.net/favicon/v2/http://${host}/?size=120)"></div></div><div class="${SUGGEST}__item-content"><span class="${SUGGEST}__item-title">${title}</span><div class="${SUGGEST}__item-subtitle"><span class="${SUGGEST}__item-info">${host}</span>${label ? `<span class="${SUGGEST}__item-label">Реклама</span><span class="${SUGGEST}__disclaimer-button" title="Информация о рекламодателе"></span><div class="${SUGGEST}__item-warning ${SUGGEST}__item-warning_type_age">16+</div>` : ''}</div></div></a></li>`;
+    const list = `<ul class="${SUGGEST}__items" role="listbox">${ad ? nav('Магазин примеров — цифровые товары', 'primer-shop.example', true) : ''}${nav('Справочник примеров — энциклопедия', 'spravka.example', false)}${text('купить пример недорого')}${text('купить пример с доставкой')}${text('купить пример отзывы')}</ul>`;
+    return page('купить пример — Яндекс: нашлось 3 млн результатов',
+        `body{margin:0;font:15px Arial,sans-serif;color:#000}
+         .search3{width:640px;margin:20px 0 0 160px;position:relative}
+         .search3 input{width:600px;height:40px;font-size:16px}
+         .${SUGGEST}__popup{position:absolute;top:44px;left:0;width:620px;background:#fff;box-shadow:0 4px 12px rgba(0,0,0,.2)}
+         .${SUGGEST}__items{list-style:none;margin:0;padding:8px 0}
+         .${SUGGEST}__item-link{display:flex;gap:12px;padding:6px 16px;color:#000;text-decoration:none}
+         .${SUGGEST}__item-thumb{width:36px;height:36px}
+         .${SUGGEST}__item-thumb-img{width:24px;height:24px}
+         .${SUGGEST}__a11y_description{position:absolute;clip:rect(0 0 0 0);width:1px;height:1px;overflow:hidden}
+         .${SUGGEST}__item-subtitle{color:#666;font-size:13px;display:flex;gap:8px}
+         .${SUGGEST}__disclaimer-button{width:16px;height:16px}
+         .serp{margin:120px 0 0 160px;width:620px}
+         footer{margin:40px 0 0 160px;color:#666}`,
+        `<form class="search3" action="/search/"><input name="text" value="купить пример" autocomplete="off">
+           <div class="${SUGGEST}__popup" id="suggest">${later ? '' : list}</div>
+         </form>
+         <div class="serp"><p>Результаты поиска: примеры, обзоры и цены в магазинах города.</p></div>
+         <footer class="footer3"><a href="https://yandex.ru/adv/">Реклама</a> · <a href="https://yandex.ru/adv/sites/"><span>Реклама</span> на сайте</a> · <a href="https://yandex.ru/support/">Справка</a> · <a href="https://yandex.ru/legal/">Соглашение</a></footer>` +
+        (later ? `<script>addEventListener('load', () => setTimeout(() => { document.getElementById('suggest').innerHTML = ${JSON.stringify(list)}; }, 800));</script>` : ''));
+};
 
 // Почта mail.ru, открытое письмо (10.10; классы — как в разметке почты,
 // текст, дата и адреса выдуманы). Прокручиваемая область письма названа по
@@ -390,6 +440,109 @@ const blog = () => page('Как работает реклама в интерн�
        <aside class="sidebar">
          <div class="subscribe" id="subscribe"><h3>Подписка</h3><p>Раз в неделю — лучшие статьи.</p></div>
        </aside>
+     </div>`);
+
+// Реклама по адресу из списков движка (11.10, klerk): сервера нет в нашем
+// словаре сетей, имена классов нейтральные — срабатывают только признаки
+// из списков (lists.js). Варианты: закреплённая ссылка-баннер; строчная
+// ссылка-баннер в оформленной обёртке (рамка не должна остаться); фрейм;
+// ловушка — ссылка на тот же сервер внутри абзаца (часть текста).
+const LIST_BANNER = 'https://bs.serving-sys.ru/Serving/adServer.bs?cn=trd&pli=100&adid=200';
+const PIXEL = 'data:image/gif;base64,R0lGODlhAQABAIAAAP///wAAACwAAAAAAQABAAACAkQBADs=';
+const listNews = variant => () => page('Новости для бухгалтеров',
+    `body{margin:0;font:15px Arial,sans-serif;color:#222}
+     .layout{display:flex;gap:24px;width:1100px;margin:24px auto}
+     .feed{flex:1}
+     .news{padding:16px;margin-bottom:16px;border:1px solid #ddd}
+     .side{width:300px}
+     .side-card{padding:12px;margin-bottom:16px;background:#f6f6f6}
+     .pin-left{position:fixed;left:16px;bottom:16px;z-index:10}
+     .box-slot{border:1px solid #ccc;padding:12px;min-height:280px;background:#fafafa;margin-bottom:16px}`,
+    `<div class="layout">
+       <main class="feed">
+         <article class="news"><h2>Сроки сдачи отчётности сдвинули</h2><p>Отчёт за квартал теперь принимают до двадцать восьмого числа.</p>
+           ${variant === 'trap' ? `<p class="quote">Условия программы описаны на <a href="${LIST_BANNER}">странице партнёра</a>, там же — ответы на частые вопросы о сроках.</p>` : ''}</article>
+         <article class="news"><h2>Новые коды в декларации</h2><p>Таблица кодов пополнилась тремя строками для доходов от аренды.</p></article>
+       </main>
+       <aside class="side">
+         <div class="side-card"><h3>Календарь</h3><p>Ближайший срок — через неделю.</p></div>
+         ${variant === 'wrapped' ? `<div class="box-slot"><a href="${LIST_BANNER}" target="_blank"><img src="${PIXEL}" width="240" height="250" alt=""></a></div>` : ''}
+         ${variant === 'frame' ? `<div class="box-slot"><iframe src="https://ad.a-ads.com/100?size=240x250" width="240" height="250" frameborder="0"></iframe></div>` : ''}
+         <div class="side-card"><h3>Вопрос дня</h3><p>Как учесть компенсацию за связь.</p></div>
+       </aside>
+     </div>
+     ${variant === 'fixed' ? `<a class="pin-left" href="${LIST_BANNER}" target="_blank"><img src="${PIXEL}" width="300" height="250" alt=""></a>` : ''}`);
+
+// Рекламная запись — article (11.10, klerk: правая панель карточек
+// партнёров; ленты с рекламными постами). Прячем по сильному
+// доказательству: два независимых признака и ссылки к рекламодателю.
+// Ловушки — статья о рекламном рынке с рубрикой «Реклама» и ссылкой на
+// рекламную систему в тексте: в ленте и на отдельной странице.
+const CLICK = n => `https://eye.targetads.io/view/click?pid=1&cn=${n}`;
+const offer = (n, title, text) => `<article class="offer"><a class="cover" href="${CLICK(n)}" target="_blank" aria-label="${title}"></a>
+    <img src="${PIXEL}" width="214" height="120" alt="${title}"><h3>${title}</h3><p>${text}</p></article>`;
+const rubricArticle = `<article class="post"><span class="rubric">Реклама</span><h2>Рынок рекламы вырос за квартал</h2>
+    <p>Аналитики подсчитали, что бюджеты на рекламу в поиске выросли, а на баннеры — снизились. Подробности — в <a href="/research/q3">обзоре</a>,
+    методика — на <a href="/about/method">странице исследования</a>, а пример объявления можно открыть по <a href="https://yabs.yandex.ru/count/Example">ссылке системы</a>.</p>
+    <p>Мнения экспертов собраны <a href="/opinions/">в отдельном материале</a>.</p></article>`;
+const recordsPage = variant => () => page('Лента для бухгалтеров',
+    `body{margin:0;font:15px Arial,sans-serif;color:#222}
+     .layout{display:flex;gap:24px;width:1100px;margin:24px auto}
+     .feed{flex:1}
+     .post{padding:16px;margin-bottom:16px;border:1px solid #ddd}
+     .rubric{display:inline-block;padding:2px 6px;background:#eee;font-size:12px}
+     .panel{width:260px;background:#fff;border-radius:16px 0 0 16px;padding:16px}
+     .offer{position:relative;display:flex;flex-direction:column;gap:8px;margin-bottom:16px}
+     .offer .cover{position:absolute;inset:0}
+     .badge{display:inline-block;padding:2px 4px;background:#000;color:#fff;opacity:.5;font-size:11px}
+     .off{margin-top:8px;opacity:.5}`,
+    variant === 'single'
+        ? `<div class="layout"><div class="feed">${rubricArticle}</div></div>`
+        : `<div class="layout">
+       <div class="feed">
+         <article class="post"><h2>Сроки сдачи отчётности сдвинули</h2><p>Отчёт за квартал теперь принимают до двадцать восьмого числа.</p><a href="/news/1">Читать</a></article>
+         ${variant === 'feed' ? `<article class="post"><span class="badge">Реклама</span><h2>Онлайн-бухгалтерия для ИП</h2><p>Сдавайте отчёты без визита в налоговую.</p>
+           <a href="https://buh.example.com/?erid=2SDnjeExample">Подробнее</a></article>` : ''}
+         ${variant === 'trap' ? rubricArticle : ''}
+         <article class="post"><h2>Новые коды в декларации</h2><p>Таблица кодов пополнилась тремя строками для доходов от аренды.</p><a href="/news/2">Читать</a></article>
+       </div>
+       ${variant === 'panel' ? `<aside class="side"><div class="panel"><div class="scroll">
+         ${offer(1, 'Партнёрская программа', 'Вознаграждение за каждого клиента')}
+         ${offer(2, 'Регистрация бизнеса', 'Свежий старт вашего дела')}
+         ${offer(3, 'Расчётный счёт', 'Первые месяцы обслуживания — бесплатно')}
+         ${offer(4, 'Зарплатный проект', 'Меньше операционных расходов')}
+         <div><span class="badge">Реклама</span></div></div>
+         <div class="off"><button>Отключить рекламу</button></div></div></aside>` : ''}
+     </div>`);
+
+// Полоса над шапкой (11.10, klerk): баннер-ссылка во всю ширину и кнопка
+// «Отключить рекламу» — метки «Реклама» нет, подпись места — кнопка.
+// Ловушки: страница подписки (та же кнопка, картинка без ссылки), меню
+// профиля, статья «Как отключить рекламу».
+const placePage = variant => () => page('Портал для бухгалтеров',
+    `body{margin:0;font:15px Arial,sans-serif;color:#222}
+     .pre{position:relative;height:90px;background:#fef5e3}
+     .pre img{display:block}
+     .pre .tools{position:absolute;top:0;right:16px;display:flex;gap:4px}
+     .tools a,.tools button{background:#fff;border:0;padding:4px;font-size:11px}
+     .site-head{display:flex;gap:24px;padding:16px 32px;border-bottom:1px solid #ddd}
+     .wrap{width:900px;margin:24px auto}
+     .plans{display:flex;gap:16px}
+     .promo-plan{flex:1;padding:16px;border:1px solid #ddd}
+     .menu{list-style:none;padding:8px;border:1px solid #ddd;width:220px}`,
+    `${variant === 'strip' ? `<div class="pre"><div class="promoHeader-container"><a href="/l/sale/?utm_source=site&utm_medium=header"><img src="${PIXEL}" width="1000" height="90" alt="Осенняя распродажа"></a></div>
+       <div class="tools"><a href="https://ads.example.com/?utm_source=site">Заказать рекламу</a><button><span>Отключить рекламу</span></button></div></div>` : ''}
+     <header class="site-head"><a href="/">Портал</a><a href="/news/">Новости</a><a href="/forum/">Форум</a></header>
+     <div class="wrap">
+       ${variant === 'strip' ? `<div class="news"><h2>Сроки сдачи отчётности сдвинули</h2><p>Отчёт за квартал теперь принимают до двадцать восьмого числа.</p></div>` : ''}
+       ${variant === 'subscribe' ? `<h1>Подписка</h1><div class="plans">
+         <div class="promo-plan"><img src="${PIXEL}" width="200" height="120" alt=""><h3>Месяц</h3><p>Все материалы и вебинары.</p><button>Отключить рекламу</button></div>
+         <div class="promo-plan"><img src="${PIXEL}" width="200" height="120" alt=""><h3>Год</h3><p>Выгоднее на треть, промокод на курсы.</p><button>Отключить рекламу</button></div></div>` : ''}
+       ${variant === 'menu' ? `<ul class="menu promo-menu"><li><a href="/profile/"><img src="${PIXEL}" width="32" height="32" alt="">Профиль</a></li><li><a href="/settings/">Настройки</a></li>
+         <li><button>Отключить рекламу</button></li><li><a href="/logout/">Выход</a></li></ul>` : ''}
+       ${variant === 'howto' ? `<div class="post promo-post"><h1>Как отключить рекламу в браузере</h1><p>Расскажем, где в настройках браузера найти блокировку всплывающих окон и как включить её за минуту.</p>
+         <a href="/img/settings-full.png"><img src="${PIXEL}" width="600" height="300" alt="Настройки браузера"></a>
+         <p>Нажмите кнопку ниже, чтобы открыть пошаговую инструкцию.</p><button>Отключить рекламу</button></div>` : ''}
      </div>`);
 
 const shop = () => page('Каталог — магазин',
@@ -548,6 +701,46 @@ const CASES = [
     // Значок «Реклама» спрятал движок или сосед, плашка осталась без пометки.
     { id: 'Яндекс Карты: значок «Реклама» спрятан соседом — плашка без пометки', url: 'https://yandex.ru/maps/213/moscow/stops/stop__3/', html: () => yandexMapsStop({ neighbor: true }),
         slot: '.masstransit-stop-panel-view__offer-banner-wrapper', content: ['.schedule', '.address'] },
+    // Ложное срабатывание 10.10 (report7, report10): вкладка карточки —
+    // «элемент списка» (три однотипных соседа), в ней плашка — пряталась
+    // вся карточка остановки. Слот — сама плашка.
+    { id: 'Яндекс Карты: «Кешбэк» во вкладке карточки — не вся карточка', url: 'https://yandex.ru/maps/213/moscow/stops/stop__4/', html: () => yandexMapsStop({ tabs: true }),
+        slot: '.masstransit-stop-panel-view__offer-banner-wrapper', content: ['.schedule', '.address', '.routes'] },
+    { id: 'Яндекс Карты: значок спрятан соседом, плашка во вкладке — не вся карточка', url: 'https://yandex.ru/maps/213/moscow/stops/stop__5/', html: () => yandexMapsStop({ tabs: true, neighbor: true }),
+        slot: '.masstransit-stop-panel-view__offer-banner-wrapper', content: ['.schedule', '.address', '.routes'] },
+    { id: 'Яндекс Карты: плашка во вкладке приходит позже — не вся карточка', url: 'https://yandex.ru/maps/213/moscow/stops/stop__6/', html: () => yandexMapsStop({ tabs: true, later: true }),
+        slot: '.masstransit-stop-panel-view__offer-banner-wrapper', content: ['.schedule', '.address', '.routes'] },
+    // Пропуск 10.10 (report8): метка внутри ссылки через счётчик Яндекса
+    // считалась «ссылкой на свой сайт» — навигацией. Навигация — короткая
+    // ссылка, пункт меню; ссылка-карточка — реклама.
+    { id: 'Поиск Яндекса: реклама в подсказках', url: 'https://yandex.ru/search/?text=kupit-primer', html: yandexSuggest,
+        slot: 'li[data-type="nav"]:has([href*="/_sttc/"])', content: ['li[data-type="nav"]:not(:has([href*="/_sttc/"]))', 'li[data-text]', '.footer3', '.serp'] },
+    { id: 'Поиск Яндекса: реклама в подсказках приходит, пока набирают запрос', url: 'https://yandex.ru/search/?text=kupit-primer-2', html: () => yandexSuggest({ later: true }),
+        slot: 'li[data-type="nav"]:has([href*="/_sttc/"])', content: ['li[data-type="nav"]:not(:has([href*="/_sttc/"]))', 'li[data-text]', '.footer3', '.serp'] },
+    { id: 'контроль: подсказки без рекламы и ссылка «Реклама» в подвале', url: 'https://yandex.ru/search/?text=kupit-primer-3', html: () => yandexSuggest({ ad: false }), control: true },
+    // Пропуск 10.10 (klerk): сервер был в RU AdList, но не в нашем словаре.
+    { id: 'списки: закреплённый баннер на рекламный сервер', url: 'https://news.example.ru/lists-fixed', html: listNews('fixed'),
+        slot: 'a.pin-left', content: ['.news', '.side-card'] },
+    { id: 'списки: строчный баннер в оформленной обёртке — без рамки', url: 'https://news.example.ru/lists-wrapped', html: listNews('wrapped'),
+        slot: '.box-slot', content: ['.news', '.side-card'] },
+    { id: 'списки: фрейм рекламного сервера', url: 'https://news.example.ru/lists-frame', html: listNews('frame'),
+        slot: '.box-slot', content: ['.news', '.side-card'] },
+    { id: 'контроль: списки — ссылка на рекламный сервер внутри абзаца', url: 'https://news.example.ru/lists-trap', html: listNews('trap'), control: true },
+    // Пропуск 10.10 (klerk, report11): карточки — article, предохранитель
+    // не давал спрятать панель.
+    { id: 'записи: панель карточек партнёров с меткой', url: 'https://news.example.ru/records-panel', html: recordsPage('panel'),
+        slot: '.scroll', content: ['.post'] },  // кнопка «Отключить рекламу» под панелью — п.0в
+    { id: 'записи: рекламный пост в ленте', url: 'https://news.example.ru/records-feed', html: recordsPage('feed'),
+        slot: 'article:has(.badge)', content: ['.post:not(:has(.badge))'] },
+    { id: 'контроль: записи — статья о рекламе с рубрикой в ленте', url: 'https://news.example.ru/records-trap', html: recordsPage('trap'), control: true },
+    { id: 'контроль: записи — статья о рекламе на своей странице', url: 'https://news.example.ru/records-single', html: recordsPage('single'), control: true },
+    // Пропуск 10.10 (klerk, report11): метки «Реклама» нет — подпись места
+    // кнопкой «Отключить рекламу».
+    { id: 'подпись места: полоса над шапкой с кнопкой «Отключить рекламу»', url: 'https://portal.example.ru/place-strip', html: placePage('strip'),
+        slot: '.pre', content: ['.site-head', '.news'] },
+    { id: 'контроль: подпись места — страница подписки', url: 'https://portal.example.ru/place-subscribe', html: placePage('subscribe'), control: true },
+    { id: 'контроль: подпись места — меню профиля', url: 'https://portal.example.ru/place-menu', html: placePage('menu'), control: true },
+    { id: 'контроль: подпись места — статья «Как отключить рекламу»', url: 'https://portal.example.ru/place-howto', html: placePage('howto'), control: true },
     { id: 'нативная реклама: метка и маркировка по закону', url: 'https://city.example.ru/news', html: nativeMarked,
         slot: '#native', content: ['.news-card:not(#native)'] },
     { id: 'контроль: маркировка в новости и ОГРН в подвале', url: 'https://news.example.ru/zakon-o-reklame', html: newsMarking, control: true },

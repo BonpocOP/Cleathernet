@@ -255,7 +255,8 @@ function networkIn(root, visibleOnly = false) {
             return true;
         }
     }
-    return false;
+    // Рекламные серверы из списков движка (lists.js).
+    return listAddressIn(root, visibleOnly);
 }
 
 /* ---------- ссылки учёта кликов ---------- */
@@ -268,6 +269,9 @@ const TRACKING_LINKS = [
     'a[href*="doubleclick.net"]', 'a[href*="ads.vk.com"]', 'a[href*="ad.mail.ru"]'
 ].join(', ');
 
+// Переход через адрес, который сетевые правила движка блокируют целиком,
+// — тоже ссылка учёта (lists.js, blockedLinkIn); его спрашивает decide(),
+// только когда он может решить.
 const trackingIn = root => root.matches(TRACKING_LINKS) || Boolean(root.querySelector(TRACKING_LINKS));
 
 /* ---------- метка «Реклама» ---------- */
@@ -290,6 +294,45 @@ function isLabelText(raw) {
     }
     const bare = text.replace(LABEL_TAIL, '').trim();
     return [text, bare].some(t => LABELS.has(t) || LABELS.has(t.replace(/[aeopcxykmthb]/g, ch => HOMOGLYPHS[ch])));
+}
+
+// Подпись места: кнопка «Отключить рекламу» рядом с баннером — сайт сам
+// говорит, что здесь реклама (klerk, 11.10: полоса над шапкой с картинкой
+// и кнопкой, без метки «Реклама»). Метка — только кнопкой или ссылкой
+// (заголовок статьи «Как отключить рекламу» — нет) и только рядом с
+// креативом (placeCreative): страница подписки «Без рекламы» с той же
+// кнопкой баннера не держит.
+const PLACE_LABELS = new Set(['отключить рекламу', 'убрать рекламу']);
+
+const isPlaceLabel = raw => PLACE_LABELS.has(raw.replace(INVISIBLE, '').replace(/\s+/g, ' ').trim().toLowerCase());
+
+// Место — креатив (фрейм или заметная картинка, видео, холст внутри
+// ссылки) и кнопки сайта; своего текста вне ссылок и кнопок почти нет.
+// Статья «Как отключить рекламу» со ссылкой-скриншотом и той же кнопкой —
+// абзацы текста, не место.
+const PLACE_TEXT = 30;
+const PLACE_CONTROLS = 'a, button, [role="button"], script, style, noscript, template';
+
+function placeCreative(root, visibleOnly) {
+    const counts = el => !visibleOnly || seen(el, AD_MIN_AREA);
+    const creative = [...root.querySelectorAll('iframe')].some(counts) ||
+        [...root.querySelectorAll('a[href] img, a[href] picture, a[href] video, a[href] canvas')].some(counts);
+    if (!creative) {
+        return false;
+    }
+    let text = 0;
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        const parent = node.parentElement;
+        if (!parent || parent.closest(PLACE_CONTROLS) || (visibleOnly && !parent.checkVisibility())) {
+            continue;
+        }
+        text += node.nodeValue.trim().length;
+        if (text > PLACE_TEXT) {
+            return false;
+        }
+    }
+    return true;
 }
 
 // Маркировка одной строкой — тоже метка: «Реклама. Рекламодатель ПАО …
@@ -340,12 +383,21 @@ const sameSite = (a, b) => {
 // Ссылка «Реклама» на свою же страницу («Реклама на сайте», «Рекламодателям»
 // в подвале или меню) — навигация, а не метка рекламы (10.10, набор обычных
 // страниц: так прятались подвал gazeta.ru и колонка vc.ru, а пункт меню,
-// который сайт прячет сам, делал «сиротой» всё меню kp.ru). У меток рекламы
-// в образцах ссылки нет или она ведёт наружу.
+// который сайт прячет сам, делал «сиротой» всё меню kp.ru). Навигация —
+// короткая ссылка, пункт меню («Реклама», «Реклама на сайте»). Метка внутри
+// ссылки-карточки (заголовок, адрес сайта, «Реклама») — часть рекламы, даже
+// если ссылка ведёт на свой сайт: поисковики, агрегаторы и соцсети пускают
+// переходы по рекламе через свой счётчик (Поиск Яндекса, 10.10: подсказки
+// под строкой поиска, yandex.ru/search/_sttc/…).
+const NAV_LINK_TEXT = 40;
+
 const ownPageLink = el => {
     const link = el.closest('a[href]');
+    if (!link || link.matches(TRACKING_LINKS) || (link.textContent || '').replace(/\s+/g, ' ').trim().length > NAV_LINK_TEXT) {
+        return false;
+    }
     try {
-        return Boolean(link) && sameSite(new URL(link.href, location.href).hostname, location.hostname);
+        return sameSite(new URL(link.href, location.href).hostname, location.hostname);
     } catch {
         return false;
     }
@@ -363,7 +415,8 @@ function labelsIn(root, visibleOnly = false) {
             continue;
         }
         const label = value.length <= 40
-            ? isLabelText(value) && isLabelText(el.textContent)
+            ? (isLabelText(value) && isLabelText(el.textContent)) ||
+                (isPlaceLabel(value) && isPlaceLabel(el.textContent) && Boolean(el.closest('button, a[href], [role="button"]')))
             : isMarkingLabel(value);
         if (label && !ownPageLink(el) && (!visibleOnly || seen(el))) {
             out.push(el);

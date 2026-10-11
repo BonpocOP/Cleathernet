@@ -46,6 +46,10 @@ function candidates(scope) {
     for (const el of labelsIn(scope)) {
         out.add(el);
     }
+    // Реклама по правилам списков движка (lists.js).
+    for (const el of findListAddress(scope)) {
+        out.add(el);
+    }
     return out;
 }
 
@@ -79,16 +83,29 @@ function evaluate(list) {
         if (!el.isConnected || insideCollapsed(el)) {
             continue;
         }
-        for (const root of slotsFor(el)) {
+        const unit = adUnitFrom(el);
+        for (let root of slotsFrom(unit)) {
             if (checked.has(root) || insideCollapsed(root)) {
                 break;
             }
             checked.add(root);
-            const decision = verdict(root);
+            let decision = verdict(root);
+            if (!decision) {
+                continue;
+            }
+            // Контейнер с рекламой — не слот (slots.js, mostlyAd). Отказ — от
+            // этого признака: у ссылки учёта блок рекламы — сама ссылка, а
+            // метка того же объявления даст весь блок, и слот подойдёт.
+            if (!mostlyAd(root, unit)) {
+                checked.delete(root);
+                root = outermostAlone(unit);
+                decision = checked.has(root) || insideCollapsed(root) ? null : verdict(root);
+                checked.add(root);
+            }
             if (decision) {
                 collapse(root, decision, decision.reason === 'empty' && hiddenAdTrace(root));
-                break;
             }
+            break;
         }
     }
     endPass();
@@ -256,6 +273,7 @@ function observe() {
 }
 
 function start() {
+    pushListsCss(true);
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', observe, { once: true });
     } else {
