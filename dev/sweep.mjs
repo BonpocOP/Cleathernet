@@ -24,10 +24,21 @@
 //
 //   node sweep.mjs [--only <часть адреса>] [--limit N] [--no-deep] [--shots] [--headed]
 //                  [--resume <папка> | --continue] [--open] [--ab <набор,набор>]
+//                  [--night] [--until ЧЧ:ММ] [--shuffle]
 //   --continue — продолжить последний незаконченный обход; --open — открыть
 //               итог в браузере (так запускает sweep.bat).
 //   --no-deep — только главные страницы (по умолчанию ещё одна статья
 //               сайта: рекламы в статьях больше).
+//   --night — ночной прогон без человека (night.bat): без окон, но браузер
+//             представляется обычным Chrome (без «HeadlessChrome» и метки
+//             автоматизации — такой сайты чаще принимают за робота); закрылся
+//             браузер — запускаем заново; паузы между сайтами, статьи — в конце прохода
+//             (тот же сайт — не раньше чем через час). Капча или защита от
+//             роботов — сайт пропускаем до конца прохода, капчу не решаем
+//             никогда; две подряд — пауза 10 мин; пять за последние 15
+//             адресов — останавливаемся (похоже, адрес IP помечен).
+//   --until ЧЧ:ММ — не начинать новый адрес после этого времени (утро).
+//   --shuffle — сайты в случайном порядке (второй замер скорости).
 
 import { chromium } from 'playwright';
 import { browserOptions } from './browser.mjs';
@@ -51,6 +62,17 @@ const RESUME = arg('--resume');
 // Скриншоты и у чистых сайтов — посмотреть глазами.
 const ALL_SHOTS = args.includes('--shots');
 const AB = arg('--ab') ? arg('--ab').split(',').filter(Boolean) : [];
+const NIGHT = args.includes('--night');
+const SHUFFLE = args.includes('--shuffle');
+// Время остановки: ЧЧ:ММ сегодня, а если уже прошло — завтра.
+const UNTIL = (() => {
+    const m = /^(\d{1,2}):(\d{2})$/.exec(arg('--until') || '');
+    if (!m) return null;
+    const t = new Date();
+    t.setHours(Number(m[1]), Number(m[2]), 0, 0);
+    if (t <= new Date()) t.setDate(t.getDate() + 1);
+    return t.getTime();
+})();
 
 const FORBIDDEN = /(^|\.)(yandex\.[a-z]+|ya\.ru|avito\.[a-z]+|kinopoisk\.ru|auto\.ru)$/i;
 const NAV_TIMEOUT = 30000;
@@ -160,27 +182,126 @@ function probe() {
     // (тревожно) или чужая вставка (партнёрские ленты, тизеры — реклама).
     const blocks = new Set();
     const away = {};
+    const narrow = {};
     const site = location.hostname.replace(/^www\./, '').split('.').slice(-2).join('.');
     for (const el of document.body.querySelectorAll('h1, h2, h3, h4, a, p, li')) {
         if (blocks.size >= 600) break;
         const t = (el.innerText || '').replace(/\s+/g, ' ').trim();
         if (t.length < 25 || t.length > 200 || blocks.has(t) || !visible(el)) continue;
         blocks.add(t);
+        // Узкая колонка сбоку (< 30 % экрана: Гисметео — 320 px из 1600) или
+        // основная область — по ширине ближайшего блочного предка.
+        let box = el;
+        while (box.parentElement && getComputedStyle(box).display.startsWith('inline')) box = box.parentElement;
+        if (box.getBoundingClientRect().width < 0.3 * vw) narrow[t] = 1;
         const link = el.closest('a[href]') || el.querySelector('a[href]');
         if (link && link.hostname && !link.hostname.endsWith(site)) away[t] = link.hostname;
     }
 
     const bodyText = (document.body.innerText || '').replace(/\s+/g, ' ').trim();
-    return { labels, frames, empty, text: bodyText.length, bodyText, blocks: [...blocks], away, height: document.documentElement.scrollHeight, title: document.title.slice(0, 100) };
+    // Шапка (13.10, Гисметео: правило списка сузило обёртку страницы, а с
+    // ней — меню; пункты ушли за стрелки): ссылки в верхних 260 px, которые
+    // видно (не обрезаны и не перекрыты), и ширина, которую они занимают.
+    const navLinks = [];
+    // Пункты, ушедшие за край полосы с прокруткой (стрелки «<» «>»).
+    let clipped = 0;
+    const clipOf = el => {
+        for (let p = el.parentElement; p && p !== document.body; p = p.parentElement) {
+            const cs = getComputedStyle(p);
+            if (cs.overflowX !== 'visible') return p.getBoundingClientRect();
+        }
+        return null;
+    };
+    // Только ссылки на свой сайт: рекламный баннер над шапкой без нас — тоже
+    // ссылки (championat: «пропало» 10 — это баннер).
+    const ownSite = location.hostname.replace(/^www\./, '').split('.').slice(-2).join('.');
+    for (const a of document.querySelectorAll('a[href]')) {
+        const r = a.getBoundingClientRect();
+        if (r.top < 0 || r.bottom > 260 || r.width < 4 || r.height < 4) continue;
+        if (!a.hostname.endsWith(ownSite) || /click|redirect|away|erid=/i.test(a.href)) continue;
+        const clip = clipOf(a);
+        if (clip && clip.width > 200 && (r.left < clip.left - 1 || r.right > clip.right + 1)) clipped += 1;
+        if (r.left < 0 || r.right > vw) continue;
+        const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+        if (hit && (hit === a || a.contains(hit) || hit.contains(a))) navLinks.push(r);
+    }
+    // Помехи поверх страницы (13.10: плашки cookie видны на многих сайтах,
+    // хотя annoyances-cookies включён; mail.ru — «сменить регион»): что
+    // осталось закреплённым поверх страницы — по виду, с разметкой как
+    // образцом для будущего механизма (образцы — в папке обхода, не в git).
+    const PESTS = [
+        ['cookie', /cookie|куки/i],
+        ['приложение', /(скачайте|установите|откройте в|открыть в|перейти в) (наше |мобильное )?приложени|app store|google play|rustore|appgallery/i],
+        ['регион', /ваш (город|регион)|выберите (свой |ваш )?(город|регион)|определить (ваше )?местоположени|сменить регион|это ваш город|верно определили/i],
+        ['стартовая', /сделать (стартовой|яндекс)|установите (яндекс[.\s]?)?браузер|сделайте .{0,20}стартовой/i],
+        ['уведомления', /(разрешите|включите|получать|подпишитесь на) .{0,20}уведомлени/i],
+        ['блокировщик', /(отключите|выключите|обнаружен|используете) .{0,25}(блокировщик|adblock)/i]
+    ];
+    const pests = [];
+    const pinnedOf = el => {
+        for (; el && el !== document.body; el = el.parentElement) {
+            const pos = getComputedStyle(el).position;
+            if (pos === 'fixed' || pos === 'sticky') return el;
+        }
+        return null;
+    };
+    const seenPest = new Set();
+    const addPest = (kind, el, text) => {
+        if (seenPest.has(el) || pests.length >= 8) return;
+        const r = visible(el);
+        if (!r || r.width < 120 || r.height < 30) return;
+        seenPest.add(el);
+        pests.push({ kind, el: describe(el), text: text.replace(/\s+/g, ' ').trim().slice(0, 100), w: Math.round(r.width), h: Math.round(r.height), html: el.outerHTML.slice(0, 15000) });
+    };
+    const pw = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    for (let node = pw.nextNode(); node && pests.length < 8; node = pw.nextNode()) {
+        const v = node.nodeValue;
+        if (v.length < 4) continue;
+        const kind = PESTS.find(([, re]) => re.test(v));
+        if (!kind) continue;
+        const pinned = pinnedOf(node.parentElement);
+        if (pinned) addPest(kind[0], pinned, v);
+    }
+    // Плавающее видео в углу: закреплённый плеер меньше половины экрана.
+    for (const media of document.querySelectorAll('video, iframe[src*="player" i], iframe[src*="video" i], iframe[src*="rutube" i], iframe[src*="youtube" i]')) {
+        const pinned = pinnedOf(media);
+        if (pinned && pinned.getBoundingClientRect().width < vw / 2) addPest('видео', pinned, media.getAttribute('src') || 'video');
+    }
+    const cookie = pests.find(p => p.kind === 'cookie') || null;
+    const nav = navLinks.length ? { links: navLinks.length, clipped, span: Math.round(Math.max(...navLinks.map(r => r.right)) - Math.min(...navLinks.map(r => r.left))) } : null;
+    return { labels, frames, empty, nav, text: bodyText.length, bodyText, blocks: [...blocks], away, narrow, cookie, pests, height: document.documentElement.scrollHeight, title: document.title.slice(0, 100) };
 }
 
 // Спрятанные поддеревья с текстом: верхний невидимый узел (родитель
 // виден) и кто его спрятал — мы (узел есть в нашем отчёте), движок
 // (совпал селектор его косметики для сайта) или сама страница.
+// Страница проверки «вы не робот» или отказ в доступе (по коду ответа,
+// заголовку, тексту и фреймам капч). Обычная страница с капчей в форме
+// комментария под это не подходит: текста у неё много.
+function gateOf(status) {
+    const text = (document.body?.innerText || '').replace(/\s+/g, ' ').trim();
+    const title = document.title || '';
+    const short = text.length < 1500;
+    if ([403, 429, 503].includes(status) && short) return 'код ' + status;
+    const words = /(вы не робот|я не робот|подтвердите, что вы|проверка браузера|проверяем ваш браузер|доступ ограничен|доступ запрещ[её]н|слишком много запросов|just a moment|checking your browser|verify you are human|are you a robot|access denied|attention required|ddos-guard|too many requests)/i;
+    const hit = words.exec(title) || (short && words.exec(text));
+    if (hit) return hit[1].toLowerCase();
+    const frame = document.querySelector('iframe[src*="captcha" i], iframe[src*="challenges.cloudflare" i], iframe[src*="smartcaptcha" i], #challenge-form, .cf-turnstile');
+    if (frame && short) return 'капча на странице';
+    return null;
+}
+
 function hiddenRoots({ ours, selectors }) {
     const name = el => [el.id ? '#' + el.id : '', typeof el.className === 'string' ? el.className : ''].join(' ').trim().slice(0, 120);
     const describe = el => (el.localName + (el.id ? '#' + el.id : '') + (typeof el.className === 'string' && el.className.trim() ? '.' + el.className.trim().split(/\s+/).slice(0, 3).join('.') : '')).slice(0, 120);
     const oursSet = new Set(ours.map(i => i.tag + ' ' + i.name));
+    // Лента ссылок без полей ввода (R15): довесок или потеря решает место
+    // на странице без нас — explainLoss.
+    const feedOf = (el, text) => {
+        let links = 0;
+        for (const a of el.querySelectorAll('a[href]')) if (!a.parentElement.closest('a[href]')) links += (a.textContent || '').replace(/\s+/g, ' ').trim().length;
+        return links >= 0.6 * text.length && !el.querySelector('input:not([type="hidden"]), textarea, select');
+    };
     const out = [];
     const walk = el => {
         for (const child of el.children) {
@@ -204,7 +325,7 @@ function hiddenRoots({ ours, selectors }) {
                     by = hit.proc ? 'движок?' : 'движок';
                 }
             }
-            out.push({ el: describe(child), by, selector, text: text.slice(0, 6000) });
+            out.push({ el: describe(child), by, selector, feed: feedOf(child, text), text: text.slice(0, 6000) });
         }
     };
     walk(document.body);
@@ -269,15 +390,35 @@ async function sweepBuild() {
     return sweepExt;
 }
 
+// Строка браузера как у обычного Chrome той же версии.
+let userAgent = null;
+async function plainUserAgent() {
+    if (userAgent) return userAgent;
+    const probeContext = await chromium.launchPersistentContext(await fs.mkdtemp(path.join(os.tmpdir(), 'ygab-ua-')), { ...browserOptions(), ...SAFE, headless: true });
+    const page = probeContext.pages()[0] || await probeContext.newPage();
+    userAgent = (await page.evaluate(() => navigator.userAgent)).replace('HeadlessChrome', 'Chrome');
+    await probeContext.close();
+    return userAgent;
+}
+
+// Безопасность (обход крутит чужую рекламу часами без присмотра):
+// песочница Chrome включена (Playwright по умолчанию её выключает),
+// скачивания запрещены. Профиль — временный: ни входов, ни данных
+// человека; ссылки — только из списка и статьи того же сайта; ничего не
+// нажимаем и не заполняем.
+const SAFE = { chromiumSandbox: true, acceptDownloads: false };
+
 async function launch(withExt, addRulesets = []) {
     const profile = await fs.mkdtemp(path.join(os.tmpdir(), withExt ? 'ygab-sweep-' : 'ygab-sweep-plain-'));
     const ext = withExt ? await sweepBuild() : null;
     const context = await chromium.launchPersistentContext(profile, {
         ...browserOptions(),
+        ...SAFE,
         headless: !HEADED,
+        ...(NIGHT ? { userAgent: await plainUserAgent() } : {}),
         viewport: VIEWPORT,
         locale: 'ru-RU',
-        args: ['--lang=ru', ...(withExt ? ['--disable-extensions-except=' + ext, '--load-extension=' + ext] : [])]
+        args: ['--lang=ru', ...(NIGHT ? ['--disable-blink-features=AutomationControlled'] : []), ...(withExt ? ['--disable-extensions-except=' + ext, '--load-extension=' + ext] : [])]
     });
     if (withExt) {
         const isWelcome = p => p.url().endsWith('/ygab/platform/welcome/welcome.html');
@@ -418,8 +559,11 @@ async function visit(context, url, { warm = false, report = false, explain = fal
         });
     }
     try {
-        await page.goto(url, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
+        const response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
         await page.waitForTimeout(SETTLE_MS);
+        // Капча или защита от роботов: дальше не идём и ничего не нажимаем.
+        const gate = await page.evaluate(gateOf, response ? response.status() : 0).catch(() => null);
+        if (gate) return { ok: false, gate, error: 'капча / защита: ' + gate };
         if (warm) return { ok: true };
         for (let i = 1; i <= 3; i += 1) {
             await page.evaluate(y => scrollTo(0, y), i * 800).catch(() => {});
@@ -491,13 +635,21 @@ function explainLoss(after, before) {
             continue;
         }
         const key = root.by + ' ' + root.el;
-        if (!groups.has(key)) groups.set(key, { by: root.by, el: root.el, selector: root.selector, sets: root.selector ? setsOfSelector(root.selector) : [], blocks: 0, own: 0, away: {}, sample: t.slice(0, 60) });
+        if (!groups.has(key)) groups.set(key, { by: root.by, el: root.el, selector: root.selector, feed: root.feed, narrow: 0, sets: root.selector ? setsOfSelector(root.selector) : [], blocks: 0, own: 0, away: {}, sample: t.slice(0, 60) });
         const group = groups.get(key);
         group.blocks += 1;
+        if (before.narrow?.[t]) group.narrow += 1;
         const host = before.away?.[t];
         if (host) group.away[host] = (group.away[host] || 0) + 1;
         else group.own += 1;
     }
+    // Довесок (R15, 13.10): лента ссылок в узкой колонке сбоку — без нас она
+    // стояла не в основной области. Основная лента (pikabu, главная Дзена,
+    // агрегатор) и блок со своим текстом или формой — потеря. Признак «раздел
+    // есть в меню» (мысль пользователя: функцию не украли) проверили и не
+    // взяли решающим: рекомендации ведут на отдельные статьи, не на разделы
+    // меню, — он ошибается в обе стороны.
+    for (const g of groups.values()) g.kind = g.feed && g.narrow >= 0.6 * g.blocks ? 'довесок' : 'потеря';
     const absentOwn = absent.filter(t => !before.away?.[t]);
     const absentAway = {};
     for (const t of absent) if (before.away?.[t]) absentAway[before.away[t]] = (absentAway[before.away[t]] || 0) + 1;
@@ -525,7 +677,13 @@ function lossLine(loss) {
     const own = (by) => sum(by, 'own') ? `, своих ${sum(by, 'own')}` : '';
     const hosts = map => Object.entries(map || {}).sort((a, b) => b[1] - a[1]).slice(0, 2).map(([h, n]) => `${h} ×${n}`).join(', ');
     if (sum('мы')) parts.push(`спрятали мы — ${sum('мы')}${own('мы')} (${loss.hidden.filter(g => g.by === 'мы').slice(0, 2).map(g => g.el).join(', ')})`);
-    if (sum('движок')) parts.push(`движок — ${sum('движок')}${own('движок')} (${loss.hidden.filter(g => g.by.startsWith('движок')).slice(0, 2).map(g => `${g.selector} из ${g.sets.join('/') || '?'}`).join('; ')})`);
+    if (sum('движок')) {
+        // Потери движка — первыми: довесок (лента ссылок сбоку) он прячет верно.
+        const engine = loss.hidden.filter(g => g.by.startsWith('движок')).sort((a, b) => (a.kind === 'потеря' ? 0 : 1) - (b.kind === 'потеря' ? 0 : 1));
+        // Партнёрская лента (ссылки наружу) — не свой контент: считаем только свои блоки.
+        const lost = engine.filter(g => g.kind === 'потеря').reduce((n, g) => n + g.own, 0);
+        parts.push(`движок — ${sum('движок')}${own('движок')}${lost ? `, ПОТЕРЯ ${lost}` : ', довесок'} (${engine.slice(0, 2).map(g => `${g.kind || '?'}: ${g.selector} из ${g.sets.join('/') || '?'}`).join('; ')})`);
+    }
     if (sum('страница')) parts.push(`скрыла страница — ${sum('страница')}`);
     if (loss.absent.blocks) parts.push(`не построено — ${loss.absent.blocks}, своих ${loss.absent.own}${hosts(loss.absent.away) ? ', наружу: ' + hosts(loss.absent.away) : ''}${loss.absent.own && loss.blocked.length ? ' (заблокировано: ' + loss.blocked.slice(0, 3).join(', ') + ')' : ''}`);
     return ` — блоков: ${loss.missing} (своих ${loss.own}); ${parts.join('; ')}`;
@@ -533,6 +691,16 @@ function lossLine(loss) {
 
 function findings(ours, plain) {
     const out = [];
+    // Помехи, которых без нас не меньше: с нами осталось — подсказка, что
+    // убирать (cookie, приложение, регион, стартовая, уведомления, видео).
+    for (const p of ours.pests || []) out.push(`помеха осталась (${p.kind}): «${p.text.slice(0, 60)}» ${p.w}×${p.h}`);
+    // Шапка сжалась или пункты меню ушли за край (без нас было видно больше).
+    if (ours.nav && plain?.nav) {
+        const fewer = ours.nav.links < plain.nav.links * 0.85 && plain.nav.links - ours.nav.links >= 3;
+        const narrower = ours.nav.span < plain.nav.span * 0.9;
+        const cut = (ours.nav.clipped || 0) - (plain.nav.clipped || 0) >= 3;
+        if (fewer || narrower || cut) out.push(`шапка сжалась: ссылок видно ${ours.nav.links} из ${plain.nav.links}, за краем ${ours.nav.clipped} (без нас ${plain.nav.clipped}), ширина ${ours.nav.span} из ${plain.nav.span} px`);
+    }
     if (ours.labels.length) out.push(`осталась метка: ${ours.labels.slice(0, 3).map(l => `«${l.text}» (${l.el})`).join(', ')}`);
     if (ours.frames.length) out.push(`чужой фрейм: ${ours.frames.slice(0, 3).map(f => `${f.src} ${f.at.w}×${f.at.h}`).join(', ')}`);
     if (ours.empty.length) {
@@ -572,7 +740,7 @@ async function save(url, ours, plain, found) {
     }
     // Снимки — отдельными файлами; сырой текст и спрятанные поддеревья
     // нужны только для разбора потери (итог разбора — в loss).
-    const strip = r => r && Object.fromEntries(Object.entries(r).filter(([k]) => !k.startsWith('shot') && !['bodyText', 'blocks', 'away', 'hidden'].includes(k)));
+    const strip = r => r && Object.fromEntries(Object.entries(r).filter(([k]) => !k.startsWith('shot') && !['bodyText', 'blocks', 'away', 'narrow', 'hidden'].includes(k)));
     await fs.writeFile(path.join(dir, 'details.json'), JSON.stringify({ url, found, ours: strip(ours), plain: strip(plain) }, null, 1));
     return files;
 }
@@ -641,59 +809,98 @@ const results = existsSync(resultsPath) ? JSON.parse(await fs.readFile(resultsPa
 const done = new Set(results.map(r => r.url));
 
 console.log(`Обход: ${sites.length} сайтов${DEEP ? ' (+ по статье)' : ''}. Папка: ${path.relative(ROOT, OUT)}`);
-const ours = await launch(true);
-const plain = await launch(false);
-const extra = AB.length ? await launch(true, AB) : null;
+// Браузер закрылся (окно закрыли, упал) — запускаем заново, а не падаем.
+const watch = context => { context.on('close', () => { context.gone = true; }); return context; };
+let ours = watch(await launch(true));
+let plain = watch(await launch(false));
+let extra = AB.length ? watch(await launch(true, AB)) : null;
+async function revive() {
+    if (ours.gone) { console.log('Браузер «с нами» закрылся — запускаю заново.'); ours = watch(await launch(true)); }
+    if (plain.gone) { console.log('Браузер «без нас» закрылся — запускаю заново.'); plain = watch(await launch(false)); }
+    if (extra?.gone) { console.log('Третий браузер закрылся — запускаю заново.'); extra = watch(await launch(true, AB)); }
+}
 if (extra) console.log(`Сравнение: третий браузер с наборами ${AB.join(', ')}`);
 const started = Date.now();
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+// Ночью: сайт, показавший капчу, до конца прохода не трогаем; две капчи
+// подряд — пауза; пять за последние 15 адресов — стоп (адрес IP, похоже,
+// помечен: дальше только хуже).
+const gated = new Set();
+const recent = [];
+let stopReason = null;
+if (SHUFFLE) sites.sort(() => Math.random() - 0.5);
+// Очередь: главные страницы, статья — сразу за своей главной; ночью —
+// в конце прохода (тот же сайт не открываем дважды подряд).
+const queue = sites.map(site => ({ site, url: site.url, main: true }));
 try {
     let n = 0;
-    for (const site of sites) {
-        n += 1;
-        const queue = [site.url];
-        for (let k = 0; k < queue.length; k += 1) {
-            const url = queue[k];
-            if (done.has(url) || FORBIDDEN.test(new URL(url).hostname)) continue;
-            // Движок применяет правила сайта со второго захода — сначала прогрев.
-            await visit(ours, url, { warm: true });
-            const a = await visit(ours, url, { report: true, explain: true });
-            const b = a.ok ? await visit(plain, url) : null;
-            const entry = { url, category: site.category, ok: a.ok, error: a.error };
-            if (a.ok) {
-                entry.speed = { ours: a.speed, plain: b?.ok ? b.speed : null };
-                if (extra) {
-                    await visit(extra, url, { warm: true });
-                    const c = await visit(extra, url, { explain: true });
-                    if (c.ok && a.speed && c.speed) {
-                        const oursHosts = new Set(a.speed.blockedHosts.map(([h]) => h));
-                        const textLoss = a.text ? Math.round((a.text - c.text) / a.text * 100) : null;
-                        // Что добавочные наборы блокируют сверх наших: правило и набор.
-                        const oursRules = new Set((a.blocked || []).map(b => b.ruleset + b.filter));
-                        entry.ab = {
-                            extraBlocked: c.speed.blocked - a.speed.blocked,
-                            kbDiff: c.speed.kb - a.speed.kb,
-                            textLoss,
-                            hosts: c.speed.blockedHosts.map(([h]) => h).filter(h => !oursHosts.has(h)).slice(0, 8),
-                            rules: [...new Set((c.blocked || []).filter(b => !oursRules.has(b.ruleset + b.filter)).map(b => `${b.ruleset}: ${b.filter}`))].slice(0, 12),
-                            loss: textLoss >= 10 ? explainLoss(c, a) : null
-                        };
-                    }
+    for (let q = 0; q < queue.length; q += 1) {
+        const { site, url, main } = queue[q];
+        if (main) n += 1;
+        const host = new URL(url).hostname;
+        if (done.has(url) || FORBIDDEN.test(host) || gated.has(host)) continue;
+        if (UNTIL && Date.now() > UNTIL) { stopReason = 'время вышло (--until)'; break; }
+        await revive();
+        // Человек не открывает сайты без передышки.
+        if (NIGHT && q) await sleep(4000 + Math.random() * 8000);
+        // Движок применяет правила сайта со второго захода — сначала прогрев.
+        const w = await visit(ours, url, { warm: true });
+        const a = w.gate ? w : await visit(ours, url, { report: true, explain: true });
+        const b = a.ok ? await visit(plain, url) : null;
+        const gate = a.gate || b?.gate || null;
+        const entry = { url, category: site.category, ok: a.ok, error: a.error };
+        if (gate) entry.gate = gate;
+        if (a.ok) {
+            entry.speed = { ours: a.speed, plain: b?.ok ? b.speed : null };
+            if (extra && !gate) {
+                await visit(extra, url, { warm: true });
+                const c = await visit(extra, url, { explain: true });
+                if (c.ok && a.speed && c.speed) {
+                    const oursHosts = new Set(a.speed.blockedHosts.map(([h]) => h));
+                    const textLoss = a.text ? Math.round((a.text - c.text) / a.text * 100) : null;
+                    // Что добавочные наборы блокируют сверх наших: правило и набор.
+                    const oursRules = new Set((a.blocked || []).map(b => b.ruleset + b.filter));
+                    entry.ab = {
+                        extraBlocked: c.speed.blocked - a.speed.blocked,
+                        kbDiff: c.speed.kb - a.speed.kb,
+                        textLoss,
+                        hosts: c.speed.blockedHosts.map(([h]) => h).filter(h => !oursHosts.has(h)).slice(0, 8),
+                        rules: [...new Set((c.blocked || []).filter(b => !oursRules.has(b.ruleset + b.filter)).map(b => `${b.ruleset}: ${b.filter}`))].slice(0, 12),
+                        loss: textLoss >= 10 ? explainLoss(c, a) : null
+                    };
                 }
-                entry.found = findings(a, b?.ok ? b : null);
-                // Без расширения не открылся — сравнивать не с чем: не «чисто».
-                if (!b?.ok) entry.plainError = b?.error || 'не открылся';
-                entry.collapsed = a.report?.collapsed ?? null;
-                if (a.loss) entry.loss = a.loss;
-                if (entry.found.length || ALL_SHOTS) entry.files = await save(url, a, b?.ok ? b : null, entry.found);
-                if (k === 0 && a.next) queue.push(a.next);
             }
-            results.push(entry);
-            done.add(url);
-            await fs.writeFile(resultsPath, JSON.stringify(results, null, 1));
-            const mins = Math.round((Date.now() - started) / 60000);
-            console.log(`[${n}/${sites.length}, ${mins} мин] ${url}: ${!a.ok ? 'не открылся — ' + a.error : entry.found.length ? 'НАЙДЕНО: ' + entry.found.join('; ') : entry.plainError ? 'не сравнить — без расширения: ' + entry.plainError : 'чисто'}`);
+            entry.found = findings(a, b?.ok ? b : null);
+            // Без расширения не открылся — сравнивать не с чем: не «чисто».
+            if (!b?.ok) entry.plainError = b?.error || 'не открылся';
+            entry.collapsed = a.report?.collapsed ?? null;
+            if (a.loss) entry.loss = a.loss;
+            if (entry.found.length || ALL_SHOTS) entry.files = await save(url, a, b?.ok ? b : null, entry.found);
+            if (main && a.next && !gate) {
+                const article = { site, url: a.next, main: false };
+                if (NIGHT) queue.push(article);
+                else queue.splice(q + 1, 0, article);
+            }
         }
-        await writeIndex(results);
+        results.push(entry);
+        done.add(url);
+        await fs.writeFile(resultsPath, JSON.stringify(results, null, 1));
+        const mins = Math.round((Date.now() - started) / 60000);
+        console.log(`[${n}/${sites.length}, ${mins} мин] ${url}: ${gate ? 'КАПЧА / ЗАЩИТА — ' + gate + ' (сайт пропускаем)' : !a.ok ? 'не открылся — ' + a.error : entry.found.length ? 'НАЙДЕНО: ' + entry.found.join('; ') : entry.plainError ? 'не сравнить — без расширения: ' + entry.plainError : 'чисто'}`);
+        if (main) await writeIndex(results);
+        recent.push(Boolean(gate));
+        if (recent.length > 15) recent.shift();
+        if (gate) {
+            gated.add(host);
+            if (recent.filter(Boolean).length >= 5) {
+                stopReason = 'капча на 5 из последних 15 адресов — похоже, адрес IP помечен; остановился, чтобы не стало хуже';
+                break;
+            }
+            if (NIGHT && recent.length >= 2 && recent[recent.length - 2]) {
+                console.log('Две капчи подряд — пауза 10 минут.');
+                await sleep(10 * 60000);
+            }
+        }
     }
 } finally {
     await writeIndex(results);
@@ -701,8 +908,16 @@ try {
     await plain.close().catch(() => {});
     if (extra) await extra.close().catch(() => {});
 }
-await fs.writeFile(path.join(OUT, 'done.txt'), new Date().toISOString());
-console.log(`Готово. Итог: ${path.join(OUT, 'index.html')}`);
+if (stopReason) {
+    // Не дописан — --continue продолжит.
+    await fs.writeFile(path.join(OUT, 'stopped.txt'), `${new Date().toISOString()} ${stopReason}\n`);
+    console.log(`Остановлен: ${stopReason}. Итог: ${path.join(OUT, 'index.html')}`);
+    // night.ps1: после остановки из-за капч второй проход не запускаем.
+    if (stopReason.startsWith('капча')) process.exitCode = 2;
+} else {
+    await fs.writeFile(path.join(OUT, 'done.txt'), new Date().toISOString());
+    console.log(`Готово. Итог: ${path.join(OUT, 'index.html')}`);
+}
 if (args.includes('--open') && process.platform === 'win32') {
     spawn('cmd', ['/c', 'start', '', path.join(OUT, 'index.html')], { detached: true, stdio: 'ignore' }).unref();
 }

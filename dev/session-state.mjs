@@ -5,6 +5,9 @@
 //
 //   node session-state.mjs --save   записать снимок (.claude/last-session.json)
 //   node session-state.mjs --diff   что изменилось с прошлого снимка
+//   node session-state.mjs --new    новые файлы от пользователя с прошлого
+//                                   вызова (хук на каждое сообщение: файл,
+//                                   положенный посреди сессии, не пропустить)
 //
 // Снимок — вне git (.claude/ исключена): в нём имена присланных файлов.
 
@@ -18,6 +21,9 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const STATE = path.join(ROOT, '.claude', 'last-session.json');
 // Папки, куда приходит новое без меня: отчёты знакомого, снимки страниц.
 const WATCH = ['test/fixtures/raw/reports', 'test/fixtures/raw/fp', 'test/fixtures/private/snippets', 'docs'];
+// Куда пользователь кладёт файлы посреди сессии (docs правлю я сам).
+const INBOX = WATCH.filter(dir => dir !== 'docs');
+const SEEN = path.join(ROOT, '.claude', 'seen-files.json');
 const BROWSER_COPY = path.join(os.homedir(), 'Desktop', 'Cleathernet-test', 'manifest.json');
 
 const git = (...args) => {
@@ -70,6 +76,34 @@ function snapshot() {
     };
 }
 
+// Отметить все нынешние файлы как увиденные; вернуть новые с прошлого раза.
+function freshFiles() {
+    let seen = {};
+    try {
+        seen = JSON.parse(fs.readFileSync(SEEN, 'utf8'));
+    } catch { /* первый запуск */ }
+    const fresh = [];
+    const now = {};
+    for (const dir of INBOX) {
+        for (const [name, info] of Object.entries(listFiles(dir))) {
+            const key = `${dir}/${name}`;
+            now[key] = info.mtime;
+            if (seen[key] !== info.mtime) fresh.push(key);
+        }
+    }
+    fs.mkdirSync(path.dirname(SEEN), { recursive: true });
+    fs.writeFileSync(SEEN, JSON.stringify(now));
+    return fresh;
+}
+
+if (process.argv.includes('--new')) {
+    const fresh = freshFiles();
+    if (fresh.length) {
+        console.log(`Новые файлы от пользователя (${fresh.length}) — прочитать и записать вывод во «Входящие» в этом же ходе: ${fresh.slice(0, 20).join(', ')}`);
+    }
+    process.exit(0);
+}
+
 if (process.argv.includes('--save')) {
     const now = snapshot();
     fs.mkdirSync(path.dirname(STATE), { recursive: true });
@@ -113,3 +147,5 @@ if (lines.length <= 3) {
     lines.push('Новых файлов нет.');
 }
 console.log(lines.join('\n'));
+// Пришедшее между сессиями показано выше — дальше хук сообщает только новое.
+freshFiles();
