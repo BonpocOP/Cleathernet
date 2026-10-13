@@ -29,8 +29,11 @@
 //
 // --resume — продолжить с места обрыва: сайты из perf-rulesets.raw.json,
 // уже измеренные с тем же --geo-ru и теми же наборами, не перемеряются.
+// --configs base,rus-1 — только эти конфигурации; --tag <имя> — свои файлы
+// perf-rulesets-<имя>.json, чтобы перемер одного сайта не затёр общий.
 //
 //   node perf-rulesets.mjs [--runs 3] [--limit N] [--only <часть адреса>] [--geo-ru] [--resume]
+//                          [--configs id,id] [--tag имя]
 
 import { chromium } from 'playwright';
 import { browserOptions } from './browser.mjs';
@@ -53,6 +56,9 @@ const LIMIT = Number(arg('--limit', 0));
 const ONLY = arg('--only', null);
 const GEO_RU = process.argv.includes('--geo-ru');
 const RESUME = process.argv.includes('--resume');
+const ONLY_CONFIGS = arg('--configs', null);
+const TAG = arg('--tag', null);
+const FILE_BASE = TAG ? `perf-rulesets-${TAG}` : 'perf-rulesets';
 const MIN_WINDOW_MS = 15000;
 const MAX_WINDOW_MS = 45000;
 const SETTLE_MS = 3000;
@@ -66,13 +72,17 @@ const RU_BLOCKED = /(^|\.)(youtube\.com)$/;
 const CAPTCHA = /проверк|captcha|robot|робот|access denied|доступ ограничен/i;
 
 // Конфигурации: что включено сверх наших настроек по умолчанию.
-const CONFIGS = [
+const ALL_CONFIGS = [
     { id: 'base', name: 'как сейчас', add: [] },
     { id: 'rus-1', name: 'RU AdList: Counters (счётчики)', add: ['rus-1'] },
     { id: 'adguard-spyware-url', name: 'URL Tracking Protection (чистые ссылки)', add: ['adguard-spyware-url'] },
     { id: 'annoyances-widgets', name: 'Chat Widgets (чаты)', add: ['annoyances-widgets'] },
     { id: 'annoyances-notifications', name: 'Notifications (запросы уведомлений)', add: ['annoyances-notifications'] }
 ];
+// «как сейчас» нужна всегда: с ней сравниваются остальные.
+const CONFIGS = ONLY_CONFIGS
+    ? ALL_CONFIGS.filter(c => c.id === 'base' || ONLY_CONFIGS.split(',').includes(c.id))
+    : ALL_CONFIGS;
 
 const corpus = JSON.parse(await fs.readFile(path.join(ROOT, 'test', 'corpus.json'), 'utf8'));
 let sites = corpus.sites
@@ -145,11 +155,19 @@ async function measure(browser, url) {
         page.addInitScript(longTaskProbe)
     ]), STEP_TIMEOUT, 'настройка вкладки');
     const net = { sent: 0, blocked: 0, failed: 0, bytes: 0 };
-    cdp.on('Network.requestWillBeSent', () => { net.sent += 1; });
+    // Что именно заблокировано: узел адреса → сколько раз. По нему видно,
+    // счётчики это или содержимое страницы.
+    const urls = new Map();
+    const blockedHosts = {};
+    cdp.on('Network.requestWillBeSent', e => { net.sent += 1; urls.set(e.requestId, e.request.url); });
     cdp.on('Network.loadingFinished', e => { net.bytes += e.encodedDataLength || 0; });
     cdp.on('Network.loadingFailed', e => {
-        if (e.blockedReason || /BLOCKED_BY_CLIENT/.test(e.errorText || '')) net.blocked += 1;
-        else net.failed += 1;
+        if (e.blockedReason || /BLOCKED_BY_CLIENT/.test(e.errorText || '')) {
+            net.blocked += 1;
+            let host = '?';
+            try { host = new URL(urls.get(e.requestId)).hostname; } catch { /* адреса нет */ }
+            blockedHosts[host] = (blockedHosts[host] || 0) + 1;
+        } else net.failed += 1;
     });
     const errors = [];
     page.on('pageerror', e => errors.push(String(e.message || e).slice(0, 120)));
@@ -177,6 +195,11 @@ async function measure(browser, url) {
                 dcl: nav ? Math.round(nav.domContentLoadedEventEnd) : null,
                 tbt: Math.round(tasks.reduce((sum, d) => sum + Math.max(0, d - 50), 0)),
                 text: (document.body && document.body.innerText || '').length,
+                // Лента целая? Видимые ссылки с текстом (карточки, заголовки)
+                // и загруженные картинки от 100 px — длина текста одна
+                // скачет от того, какая лента пришла.
+                links: [...document.querySelectorAll('a[href]')].filter(a => a.offsetParent && a.innerText.trim().length >= 20).length,
+                images: [...document.images].filter(img => img.complete && img.naturalWidth >= 100 && img.offsetParent).length,
                 // mail.ru: document.title бывает null (страница его подменяет).
                 title: String(document.title || '').slice(0, 60)
             };
@@ -189,7 +212,8 @@ async function measure(browser, url) {
             scriptMs: Math.round(metrics.ScriptDuration * 1000),
             taskMs: Math.round(metrics.TaskDuration * 1000),
             errors: errors.length,
-            errorSamples: errors.slice(0, 3)
+            errorSamples: errors.slice(0, 3),
+            blockedHosts
         });
         if (CAPTCHA.test(out.title) && out.text < 2000) {
             out.ok = false;
@@ -236,7 +260,7 @@ for (const config of CONFIGS) {
 }
 console.log(`  наборы «как сейчас»: ${browsers[0].rulesets.join(', ')}`);
 
-const RAW_FILE = path.join(OUT_DIR, 'perf-rulesets.raw.json');
+const RAW_FILE = path.join(OUT_DIR, `${FILE_BASE}.raw.json`);
 const raw = {};
 const unreachable = {};
 if (RESUME) {
@@ -299,7 +323,10 @@ for (const [url, byConfig] of Object.entries(raw)) {
         const good = runs.filter(r => r.ok);
         perSite[url][id] = {
             opened: good.length,
-            ...Object.fromEntries([...METRICS, 'blocked', 'text', 'errors'].map(m => [m, median(good.map(r => r[m]))]))
+            ...Object.fromEntries([...METRICS, 'blocked', 'text', 'links', 'images', 'errors'].map(m => [m, median(good.map(r => r[m]))])),
+            // Разброс проходов: если «потеря» меньше разброса — это шум.
+            textRange: good.length ? [Math.min(...good.map(r => r.text)), Math.max(...good.map(r => r.text))] : null,
+            linksRange: good.length ? [Math.min(...good.map(r => r.links)), Math.max(...good.map(r => r.links))] : null
         };
     }
 }
@@ -336,7 +363,7 @@ for (const config of CONFIGS.slice(1)) {
     };
 }
 
-await fs.writeFile(path.join(OUT_DIR, 'perf-rulesets.json'), JSON.stringify({ date: new Date().toISOString(), runs: RUNS, geoRu: GEO_RU, window: { minMs: MIN_WINDOW_MS, maxMs: MAX_WINDOW_MS, settleMs: SETTLE_MS }, baseRulesets: browsers[0].rulesets, summary, perSite, unreachable }, null, 2));
+await fs.writeFile(path.join(OUT_DIR, `${FILE_BASE}.json`), JSON.stringify({ date: new Date().toISOString(), runs: RUNS, geoRu: GEO_RU, window: { minMs: MIN_WINDOW_MS, maxMs: MAX_WINDOW_MS, settleMs: SETTLE_MS }, baseRulesets: browsers[0].rulesets, summary, perSite, unreachable }, null, 2));
 
 const f = v => (v === null || v === undefined ? '—' : (v > 0 ? '+' : '') + v.toFixed(1) + '%');
 console.log('\nИзменение относительно «как сейчас» (медиана по сайтам / среднее):');
@@ -346,4 +373,4 @@ for (const [id, s] of Object.entries(summary)) {
     if (s.suspicious.length) console.log('  подозрения на поломку:', JSON.stringify(s.suspicious));
     if (s.topEffect.length) console.log('  где сильнее всего:', JSON.stringify(s.topEffect.slice(0, 5)));
 }
-console.log(`\nГотово за ${Math.round((Date.now() - started) / 60000)} мин. Сохранено: docs/research/perf-rulesets.json`);
+console.log(`\nГотово за ${Math.round((Date.now() - started) / 60000)} мин. Сохранено: docs/research/${FILE_BASE}.json`);

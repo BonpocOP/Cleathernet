@@ -31,11 +31,14 @@ if (await run(['build-extension.mjs'])) {
   console.log('Сборка не удалась, подробности в docs\\research\\perf-ru.log');
   process.exit(1);
 }
-console.log('Замер идёт, около полутора часов. Окно можно свернуть, но не закрывать.');
+// Свои параметры замера (perf-dzen.bat) — вместо общего прогона.
+const extra = process.argv.slice(2);
+const tag = extra.includes('--tag') ? '-' + extra[extra.indexOf('--tag') + 1] : '';
+console.log(extra.length ? 'Замер идёт, около 10 минут. Окно не закрывать.' : 'Замер идёт, около полутора часов. Окно можно свернуть, но не закрывать.');
 console.log('Ход — в docs\\research\\perf-ru.log');
-if (await run(['perf-rulesets.mjs', '--geo-ru', '--runs', '2', '--resume'])) {
+if (await run(['perf-rulesets.mjs', '--geo-ru', ...(extra.length ? extra : ['--runs', '2', '--resume'])])) {
   console.log('Замер прервался, подробности в docs\\research\\perf-ru.log.');
-  console.log('Запустите снова — продолжит с места обрыва.');
+  console.log('Запустите снова.');
   process.exit(1);
 }
-console.log('Готово. Результат: docs\\research\\perf-rulesets.json');
+console.log(`Готово. Результат: docs\\research\\perf-rulesets${tag}.json`);

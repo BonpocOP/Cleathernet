@@ -18,12 +18,74 @@ const sizable = el => {
     return r.width > 20 && r.height > 20;
 };
 
+// Кнопка «закрыть» у рекламного места — часть места, а не содержимое:
+// движок или сосед прячет креатив, а обёртка с крестиком остаётся висеть
+// поверх страницы (klerk, обход 12.10: баннер Ozon спрятан, «×» на
+// месте). Кнопка — маленькая, и весь её текст — крестик или «закрыть»;
+// значок без текста — с такой подписью для экранного диктора или с
+// «close» в имени. Ошибиться дёшево: обёртку без содержимого прячем, только
+// если в ней есть рекламный след.
+const CLOSE_TEXT = /^(?:[×✕✖✗xх]|закрыть|скрыть|close)$/i;
+const CLOSE_NAME = /close|закр/i;
+const CLOSE_SIDE = 48;
+const CLOSE_WIDE = 120;
+const CLOSE_WORD = 7;
+const CLOSE_CONTROLS = 'button, [role="button"], [aria-label], [title], [class*="close" i]';
+
+function closeControl(el) {
+    const r = el.getBoundingClientRect();
+    const text = (el.innerText || '').trim();
+    if (r.height > CLOSE_SIDE || r.width > (text.length > 1 ? CLOSE_WIDE : CLOSE_SIDE)) {
+        return false;
+    }
+    if (text) {
+        return CLOSE_TEXT.test(text);
+    }
+    const label = (el.getAttribute('aria-label') || el.getAttribute('title') || '').trim();
+    return CLOSE_TEXT.test(label) || CLOSE_NAME.test(typeof el.className === 'string' ? el.className : '');
+}
+
+const closeControlsIn = el => [el, ...el.querySelectorAll(CLOSE_CONTROLS)].filter(node => node.matches(CLOSE_CONTROLS) && closeControl(node));
+
+// Весь видимый текст узла — в кнопках закрытия.
+function closeTextOnly(el, inClose) {
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        const parent = node.parentElement;
+        if (node.nodeValue.trim() && parent && parent.checkVisibility() && !inClose(parent)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// Кроме узла, у родителя виден только текст кнопок закрытия.
+function onlyCloseBesides(parent, node) {
+    if ([...parent.childNodes].some(n => n.nodeType === 3 && n.nodeValue.trim())) {
+        return false;
+    }
+    return [...parent.children].every(kid => {
+        if (kid === node) {
+            return true;
+        }
+        const closes = closeControlsIn(kid);
+        return closeTextOnly(kid, n => closes.some(c => c === n || c.contains(n)));
+    });
+}
+
 function visibleContent(el) {
-    if ((el.innerText || '').trim().length > 2) {
+    const text = (el.innerText || '').trim().length;
+    if (text > CLOSE_WORD) {
+        return true;
+    }
+    // Кнопки закрытия ищем, только если без них узел почти пуст.
+    let closes = null;
+    const inClose = node => (closes || (closes = closeControlsIn(el))).some(c => c === node || c.contains(node));
+    if (text > 2 && !closeTextOnly(el, inClose)) {
         return true;
     }
     for (const media of el.querySelectorAll(MEDIA)) {
-        if (sizable(media)) {
+        if (sizable(media) && !inClose(media)) {
             return true;
         }
     }
@@ -96,7 +158,12 @@ function outermostAlone(el) {
             break;
         }
         const others = [...parent.children].some(kid => kid !== node && shown(kid) && visibleContent(kid));
-        if (others || (parent.innerText || '').trim().length > (node.innerText || '').trim().length + 2) {
+        if (others) {
+            break;
+        }
+        // Лишний текст у родителя — свой, а не надпись кнопки закрытия.
+        const extra = (parent.innerText || '').trim().length - (node.innerText || '').trim().length;
+        if (extra > 2 && (extra > CLOSE_WORD + 2 || !onlyCloseBesides(parent, node))) {
             break;
         }
         node = parent;
@@ -148,23 +215,63 @@ function labelOnly(node) {
     return true;
 }
 
+// Части одного объявления ведут через счётчик рекламной системы: заголовок,
+// строка адреса с меткой, быстрые ссылки — у каждой своя ссылка учёта.
+// Блок рекламы, найденный от метки, бывает лишь строкой карточки (Поиск
+// Яндекса, 12.10: «verbosity.ru › … Промо» — адрес длиннее подписи);
+// спрятав строку, мы сняли бы с рекламы пометку, а сама реклама осталась
+// бы — хуже пропуска. Поэтому блок растёт, пока рядом есть ещё ссылка учёта
+// и все видимые переходы предка — ссылки учёта: содержимое сайта (карточка
+// остановки на Картах, обычный результат) ведёт не через счётчик. Не
+// дальше элемента списка — слот ищет slotsFrom; и не через второе
+// объявление (вторая метка).
+const navigates = a => {
+    const href = a.getAttribute('href') || '';
+    return href !== '' && !href.startsWith('#') && !/^javascript:/i.test(href) && a.checkVisibility();
+};
+
+function adExtent(unit) {
+    let node = unit;
+    for (let i = 0; i < MAX_LEVELS && !listItem(node); i += 1) {
+        const parent = node.parentElement;
+        if (!parent || parent === document.body || parent === document.documentElement || parent.matches(NEVER)) {
+            break;
+        }
+        // Сначала дешёвое: есть ли рядом ссылка учёта вообще (на большинстве
+        // страниц — нет); видимость — только у ссылок такого предка.
+        if (![...parent.querySelectorAll(TRACKING_LINKS)].some(a => !node.contains(a) && navigates(a))) {
+            break;
+        }
+        if (![...parent.querySelectorAll('a[href]')].every(a => a.matches(TRACKING_LINKS) || !navigates(a))) {
+            break;
+        }
+        if (labelsDeep(parent, true).length > Math.max(1, labelsDeep(node, true).length)) {
+            break;
+        }
+        node = parent;
+    }
+    return node;
+}
+
 // Откуда искать слот: от подписи — вверх до ближайшего узла, где кроме
-// подписи есть сама реклама.
+// подписи есть сама реклама, и дальше — на всё объявление (adExtent).
 function adUnitFrom(el) {
     // Метку спрятал кто-то другой — блок рекламы её видимый предок.
     const orphan = orphanUnit(el);
     if (orphan) {
-        return orphan;
+        return adExtent(orphan);
     }
     let node = el;
+    let fromLabel = false;
     for (let i = 0; i < MAX_LEVELS && labelOnly(node); i += 1) {
+        fromLabel = true;
         const parent = node.parentElement;
         if (!parent || parent === document.body || parent === document.documentElement) {
             break;
         }
         node = parent;
     }
-    return node;
+    return fromLabel ? adExtent(node) : node;
 }
 
 // Кандидаты в слоты от блока рекламы, от ближнего к дальнему: элементы
@@ -269,11 +376,36 @@ function bait(root) {
 // место, которое без нас осталось бы пустым (цель №5).
 function hiddenAdTrace(root) {
     for (const el of root.querySelectorAll('*')) {
-        if ((isNetworkNode(el) || nameStrength(el) > 0 || (el.matches('a, iframe') && listAddressMatch(el))) && !insideCollapsed(el) && getComputedStyle(el).display === 'none') {
+        if ((isNetworkNode(el) || nameStrength(el) > 0 || (el.matches('a, iframe') && listAddressMatch(el)) || blockedFrame(el)) && !insideCollapsed(el) && getComputedStyle(el).display === 'none') {
             return true;
         }
     }
     return false;
+}
+
+// Остался ли в спрятанном нами слоте рекламный след (main.js, «слот
+// отдан под другое»). Только по разметке — размеров у спрятанного нет:
+// сеть, номер блока, адрес из списков или с заблокированного сервера,
+// ссылка учёта, метка, маркировка, рекламное имя у самого слота или
+// внутри. Любой след — блок остаётся спрятанным: крутящийся баннер с
+// новым объявлением не мигает. Сначала дешёвое.
+function adTraceLeft(root) {
+    if (isNetworkNode(root) || root.querySelector(NETWORK_NODES) || [...root.querySelectorAll(BLOCK_ID_NODES)].some(isBlockId)) {
+        return true;
+    }
+    if (trackingIn(root) || nameStrength(root, true) > 0) {
+        return true;
+    }
+    for (const node of root.querySelectorAll('iframe[src], script[src]')) {
+        if (NETWORK.test(node.src) || blockedFrame(node)) {
+            return true;
+        }
+    }
+    const names = namesIn(root);
+    if (names.strong > 0 || names.weak >= 2) {
+        return true;
+    }
+    return findListAddress(root).length > 0 || blockedLinkIn(root) || labelsDeep(root).length > 0 || markingIn(root);
 }
 
 // Подтверждения имени, не зависящие от словаря сайта (R12).

@@ -316,8 +316,7 @@ function listAddressCss() {
 // один адрес много.
 const blockedHostCache = new Map();
 
-function blockedLinkHost(a) {
-    const host = a.hostname;
+function blockedHost(host) {
     if (!LISTS || !host) {
         return false;
     }
@@ -327,6 +326,32 @@ function blockedLinkHost(a) {
         blockedHostCache.set(host, answer);
     }
     return answer;
+}
+
+const blockedLinkHost = a => blockedHost(a.hostname);
+
+// Фрейм с чужого адреса, который сетевые правила блокируют целиком, —
+// место рекламной биржи (13.10: otm-r.com, betweendigital, buzzoola,
+// adx.com.ru — в списках движка есть, в нашем словаре сетей и в правилах
+// «по адресу» нет). Пиксель учёта во фрейме — не реклама: фрейм должен
+// быть размером с рекламу — на экране, а спрятанный (движком, соседом) —
+// по объявленным width и height.
+function frameHost(frame) {
+    try {
+        return new URL(frame.src).hostname;
+    } catch {
+        return '';
+    }
+}
+
+const declaredArea = frame => (parseInt(frame.getAttribute('width'), 10) || 0) * (parseInt(frame.getAttribute('height'), 10) || 0);
+
+function blockedFrame(frame, visibleOnly = false) {
+    if (frame.localName !== 'iframe' || !LISTS) {
+        return false;
+    }
+    const sized = seen(frame, AD_MIN_AREA) || (!visibleOnly && declaredArea(frame) >= AD_MIN_AREA);
+    return sized && blockedHost(frameHost(frame));
 }
 
 function blockedLinkIn(root) {

@@ -251,7 +251,7 @@ function networkIn(root, visibleOnly = false) {
         }
     }
     for (const node of root.querySelectorAll(visibleOnly ? 'iframe[src]' : 'iframe[src], script[src]')) {
-        if (NETWORK.test(node.src) && counts(node)) {
+        if ((NETWORK.test(node.src) && counts(node)) || blockedFrame(node, visibleOnly)) {
             return true;
         }
     }
@@ -279,7 +279,11 @@ const trackingIn = root => root.matches(TRACKING_LINKS) || Boolean(root.querySel
 // Отдельная короткая надпись, а не слово в тексте. Сама по себе ничего не
 // решает (статья о рекламе, рубрика, ссылка «Реклама» на сайте): нужен
 // второй признак.
-const LABELS = new Set(['реклама', 'соцреклама', 'промо', 'sponsored', 'advertisement', 'advertising', 'ad', 'ads', 'спонсор', 'партнёрский материал', 'партнерский материал']);
+// «На правах рекламы», «Партнёрский контент» — так помечают нативную
+// рекламу российские издания (13.10, аудит: метка была, мы её не знали).
+const LABELS = new Set(['реклама', 'соцреклама', 'промо', 'sponsored', 'advertisement', 'advertising', 'ad', 'ads', 'спонсор',
+    'партнёрский материал', 'партнерский материал', 'на правах рекламы', 'партнёрский контент', 'партнерский контент',
+    'спонсорский контент', 'sponsored content', 'promoted']);
 // Украшения после метки: возрастная отметка и кнопка меню — «реклама ·
 // 0+», «РЕКЛАМА •••», «Соцреклама ⋮» (Яндекс, 08–09.10).
 const LABEL_TAIL = /(?:\s*(?:\d{1,2}\+|[·•⋮…|.]))+$/u;
@@ -405,7 +409,11 @@ const ownPageLink = el => {
 
 // Элементы-метки внутри узла: текст элемента целиком — метка (или
 // маркировка одной строкой, начинающаяся с метки).
-function labelsIn(root, visibleOnly = false) {
+const SKIP_MARKING = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE']);
+
+// marking — куда сложить узлы с маркировкой без метки (поиск кандидатов,
+// main.js): тот же обход текста, без второго.
+function labelsIn(root, visibleOnly = false, marking = null) {
     const out = [];
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
     for (let node = walker.nextNode(); node; node = walker.nextNode()) {
@@ -413,6 +421,10 @@ function labelsIn(root, visibleOnly = false) {
         const el = node.parentElement;
         if (!el || value.length > 240) {
             continue;
+        }
+        if (marking && value.length > 20 && (value.indexOf('екламодат') !== -1 || value.indexOf('erid') !== -1) &&
+            !SKIP_MARKING.has(el.tagName) && MARKING.some(re => re.test(value))) {
+            marking.push(el);
         }
         const label = value.length <= 40
             ? (isLabelText(value) && isLabelText(el.textContent)) ||

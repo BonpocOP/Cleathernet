@@ -93,12 +93,18 @@ function unhideInline(el, entry) {
 // строго по очереди: иначе старая могла бы убраться раньше, чем вставилась.
 function pushCss() {
     const selectors = [];
+    const shifts = [];
     for (const entry of collapsed.values()) {
         if (entry.selector && !entry.inline) {
             selectors.push(entry.selector);
+            for (const shift of entry.shifts) {
+                if (shift.selector) {
+                    shifts.push(`${shift.selector} { top: ${shift.top}px !important;${shift.toBottom ? ` height: calc(100vh - ${shift.top}px) !important; max-height: none !important;` : ''} }`);
+                }
+            }
         }
     }
-    const css = selectors.length ? selectors.join(',\n') + ' { display: none !important; }' : '';
+    const css = (selectors.length ? selectors.join(',\n') + ' { display: none !important; }' : '') + (shifts.length ? '\n' + shifts.join('\n') : '');
     if (css === appliedCss) {
         return;
     }
@@ -132,8 +138,57 @@ function syncStyles() {
         } else {
             unhideInline(el, entry);
         }
+        // Поднятые закреплённые (stackedBelow): ушедший узел — забыть,
+        // путь не туда — пересобрать.
+        entry.shifts = entry.shifts.filter(shift => shift.el.isConnected);
+        for (const shift of entry.shifts) {
+            if (!cssBroken && !(shift.selector && matchesOnly(shift.selector, shift.el))) {
+                shift.selector = selectorFor(shift.el);
+            }
+        }
     }
     pushCss();
+}
+
+// Прилипающая полоса у верха (реклама над шапкой) держит место не только
+// собой: шапка и колонки ниже прилипают со сдвигом на её высоту (klerk,
+// 12.10: у шапки top — высота полосы, у колонки — полоса плюс шапка).
+// Спрятав полосу, мы оставили бы над ними дыру — меню «повисает», текст
+// уходит под него. Как будто полосы не было: такие закреплённые поднимаем
+// на её высоту той же таблицей стилей; выключение на сайте снимает и это.
+// Только для полосы, прилипшей к самому верху, и только тех, чей сдвиг не
+// меньше её высоты, — иначе их место от полосы не зависит. Обход всех
+// узлов — один раз на такую полосу (на странице она одна).
+const STACK_EDGE = 2;
+const STACK_REACH = 400;
+
+function stackedBelow(el) {
+    const own = getComputedStyle(el);
+    if ((own.position !== 'sticky' && own.position !== 'fixed') || !(parseFloat(own.top) <= STACK_EDGE)) {
+        return [];
+    }
+    const height = el.getBoundingClientRect().height;
+    if (height < 10) {
+        return [];
+    }
+    const shifts = [];
+    for (const node of document.body.querySelectorAll('*')) {
+        if (el.contains(node) || node.contains(el)) {
+            continue;
+        }
+        const cs = getComputedStyle(node);
+        if (cs.position !== 'sticky' && cs.position !== 'fixed') {
+            continue;
+        }
+        const top = parseFloat(cs.top);
+        if (top >= height - STACK_EDGE && top <= height + STACK_REACH) {
+            // Колонка до низа экрана (высота «экран минус сдвиг») — и после
+            // подъёма до низа.
+            const toBottom = Math.abs(node.getBoundingClientRect().bottom - innerHeight) <= STACK_EDGE;
+            shifts.push({ el: node, top: Math.max(0, Math.round(top - height)), toBottom, selector: null });
+        }
+    }
+    return shifts;
 }
 
 // decision — из verdict(): причина, сумма сил и признаки (для отчёта:
@@ -144,7 +199,7 @@ function collapse(el, decision = null, afterOther = false) {
     }
     // empty — спрятано как пустое место: решение условное, его снимает
     // содержимое, пришедшее позже (main.js, refilled).
-    collapsed.set(el, { selector: null, inline: null, empty: Boolean(decision && decision.reason === 'empty'), decision, afterOther });
+    collapsed.set(el, { selector: null, inline: null, empty: Boolean(decision && decision.reason === 'empty'), decision, afterOther, shifts: stackedBelow(el) });
     if (collapseLog.length < 50) {
         const r = el.getBoundingClientRect();
         collapseLog.push({
@@ -197,12 +252,11 @@ function uncollapse(el) {
     pushCss();
 }
 
-// Спрятанный пустым предок узла, если есть.
-function emptyCollapsedAbove(node) {
+// Спрятанный нами предок узла (или сам узел), если есть.
+function collapsedAbove(node) {
     for (let up = node; up; up = up.parentElement) {
-        const entry = collapsed.get(up);
-        if (entry) {
-            return entry.empty ? up : null;
+        if (collapsed.has(up)) {
+            return up;
         }
     }
     return null;

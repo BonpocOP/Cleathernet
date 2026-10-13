@@ -1,0 +1,56 @@
+<!doctype html>
+<!--
+Страница «переход остановлен» — сборка кладёт её в корень на место
+strictblock.html движка (dev/build-extension.mjs): правила движка ведут
+именно туда. Логику оставляем его — js/strictblock.js: он ищет здесь
+#theURL, #parsed, #toggleParse, #reason, #urlskip, #disableWarning, #back,
+#bye, #proceed; сборка проверяет, что все они на месте.
+
+Без data-i18n, aria-label и placeholder: его js/i18n.js при загрузке
+переписывает эти атрибуты своими строками.
+
+Пути — от корня расширения: страница лежит в корне, наши файлы — в /ygab/.
+-->
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cleathernet: переход остановлен</title>
+<link rel="stylesheet" href="/ygab/platform/strictblock/strictblock.css">
+<link rel="icon" type="image/png" href="/ygab/platform/icons/icon32.png">
+</head>
+<body>
+<main class="page">
+    <header class="hero">
+        <img class="hero__icon" src="/ygab/platform/icons/icon128.png" alt="" width="56" height="56">
+        <div>
+            <h1 class="hero__title">Переход остановлен</h1>
+            <p class="hero__lead">Этот адрес — в списке опасных сайтов: заражённые
+                файлы, мошенничество, подделки под известные сайты.</p>
+        </div>
+    </header>
+
+    <section class="card">
+        <div id="theURL" class="collapsed">
+            <p class="code"><span>&nbsp;</span><span id="toggleParse" class="hidden">разобрать адрес</span></p>
+            <ul id="parsed"></ul>
+        </div>
+        <p id="reason" class="note" hidden></p>
+        <p id="urlskip" class="note" hidden></p>
+    </section>
+
+    <div class="actions" id="actionContainer">
+        <button id="back" class="button button_main" type="button">Назад</button>
+        <button id="bye" class="button button_main" type="button">Закрыть вкладку</button>
+        <button id="proceed" class="button" type="button">Всё равно открыть</button>
+    </div>
+
+    <label class="check"><input type="checkbox" id="disableWarning">
+        Больше не предупреждать об этом сайте</label>
+
+    <p class="foot">Предупреждает Cleathernet. Ссылки на рекламу и счётчики
+        он не останавливает — только сайты из списков опасных.</p>
+</main>
+<script src="/js/strictblock.js" type="module"></script>
+</body>
+</html>

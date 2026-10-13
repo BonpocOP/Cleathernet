@@ -136,6 +136,47 @@ const yandexLate = async () => {
          <script>setTimeout(() => document.getElementById('search-result').insertAdjacentHTML('beforeend', ${late}), 800);</script>`);
 };
 
+// Поиск Яндекса (report16, 12.10, вживую): метка «Промо» — в строке адреса
+// рядом с «сайт › заголовок», а не отдельной строкой. Блок рекламы от метки
+// — одна строка (адрес длиннее подписи), и пряталась только она: реклама
+// осталась без пометки. Вёрстка и классы — как на сайте (первый класс
+// пункта — хеш, у рекламы он бывает свой), текст и адреса выдуманы.
+// own — у рекламного пункта свой первый класс (не список однотипных);
+// sitelinks — быстрые ссылки (без них текст объявления без ссылок);
+// later — реклама приходит после загрузки; parts — пункт собирается по
+// частям: сначала заголовок, потом строка с меткой и текст.
+const yandexPromoSubtitle = ({ own = false, sitelinks = true, later = false, parts = false, ad = true } = {}) => {
+    const sttc = n => `https://ya.ru/search/_sttc/Qx7Lm${n}/a1B2c3D4e5/ZkPq${n}w?baobab_event_id=t${n}`;
+    const title = `<div class="c0h8j OrganicTitle OrganicTitle_size_l"><a target="_blank" class="Link OrganicTitle-Link link" href="${sttc(1)}"><div class="Favicon Favicon_size_m"></div><h2 class="OrganicTitle-LinkText"><span class="OrganicTitleContentSpan">Нужен <b>планировщик</b>? Попробуйте Задачник!</span></h2></a></div>`;
+    const subtitle = `<div class="Organic-Subtitle"><div class="Path Organic-Path"><a class="Link Path-Item link" href="${sttc(2)}"><b>zadachnik.example</b><span class="Path-Separator">›</span>Нужен планировщик? Попробуйте Задачник!</a></div><div class="cxRo7x OrganiccxRo7x"><span class="cxRo7xHb">Промо</span></div></div>`;
+    const links = sitelinks ? `<div class="Sitelinks Organic-Sitelinks">${['Бесплатно', 'Для команды', 'Тарифы'].map((t, i) => `<div class="Sitelinks-Item"><a class="Link link" href="${sttc(3 + i)}">${t}</a></div>`).join('')}</div>` : '';
+    const rest = `<button class="Extralinks Organic-Extralinks" aria-label="Действия"></button><div class="Organic-ContentWrapper"><div class="OrganicText Typo Typo_text_m"><span class="OrganicTextContentSpan">Планируйте дела всей семьёй. Есть бесплатный тариф! · Напоминания. Общие списки. Работает на всех устройствах. Легко начать.</span></div>${links}</div>`;
+    const cls = own ? 'q4Zr9Tk q4Zr9TkD4Tb' : 'aGxDtSiQdfbXz';
+    const promo = parts
+        ? `<li class="${cls}"><div class="Organic Typo Typo_text_m" id="promo-organic">${title}</div></li>`
+        : `<li class="${cls}"><div class="Organic Typo Typo_text_m">${title}${subtitle}${rest}</div></li>`;
+    const results = [
+        organic('Планировщик задач — Википедия', 'ru.wikipedia.org', 'Планировщик задач — программа, которая запускает другие программы по расписанию или помогает человеку вести дела.'),
+        organic('Лучшие планировщики дел: обзор', 'obzor.example', 'Сравнили десять приложений для списков дел: что бесплатно, что за подписку и где удобнее работать вместе.', 'Сравнение'),
+        organic('Как планировать неделю', 'blog.example', 'Простой способ разложить дела по дням и не забыть важное: три списка и пять минут вечером.')
+    ];
+    const list = later ? results.join('') : (ad ? promo : '') + results.join('');
+    const script = later
+        ? `<script>setTimeout(() => document.getElementById('search-result').insertAdjacentHTML('afterbegin', ${JSON.stringify(promo)}), 800);</script>`
+        : parts ? `<script>setTimeout(() => document.getElementById('promo-organic').insertAdjacentHTML('beforeend', ${JSON.stringify(subtitle + rest)}), 800);</script>` : '';
+    return page('планировщик — Яндекс: нашлось 3 млн результатов',
+        `body{margin:0;font:15px Arial,sans-serif;color:#000}
+         .content{width:620px;margin:20px 0 0 160px}
+         #search-result{list-style:none;margin:0;padding:0}
+         #search-result > li{margin-bottom:24px}
+         .OrganicTitle-LinkText{font-size:18px;margin:0;font-weight:normal}
+         .Favicon{display:inline-block;width:16px;height:16px}
+         .Organic-Subtitle{display:flex;gap:8px}
+         .Extralinks{display:none}
+         .Sitelinks-Item{display:inline-block;margin-right:12px}`,
+        `<div class="content"><ul id="search-result">${list}</ul></div>${script}`);
+};
+
 // Яндекс Видео (08–09.10): реклама в списке роликов и баннер справа.
 // Содержимое обоих — в закрытом теневом DOM (так их прислали: при
 // копировании блок пустой). Обычные ролики — по вёрстке списка, текст наш.
@@ -473,6 +514,65 @@ const listNews = variant => () => page('Новости для бухгалтер
      </div>
      ${variant === 'fixed' ? `<a class="pin-left" href="${LIST_BANNER}" target="_blank"><img src="${PIXEL}" width="300" height="250" alt=""></a>` : ''}`);
 
+// Аудит 13.10: данные есть, а признака не было. Фрейм рекламной биржи,
+// которую сетевые правила движка блокируют целиком (в словаре сетей и в
+// правилах «по адресу» её нет), — виден (движок блокирует запрос, рамка
+// остаётся) или спрятан соседом (осталась обёртка). Ловушки: плеер видео с
+// незаблокированного адреса и пиксель счётчика во фрейме 1×1.
+const SSP_FRAME = host => `<iframe src="https://${host}/frame?size=240x250" width="240" height="250" frameborder="0"></iframe>`;
+const sspPage = variant => () => page('Новости района',
+    `body{margin:0;font:15px Arial,sans-serif;color:#222}
+     .layout{display:flex;gap:24px;width:1100px;margin:24px auto}
+     .feed{flex:1}
+     .news{padding:16px;margin-bottom:16px;border:1px solid #ddd}
+     .side{width:300px}
+     .side-card{padding:12px;margin-bottom:16px;background:#f6f6f6}
+     .box-slot{border:1px solid #ccc;padding:12px;min-height:280px;background:#fafafa;margin-bottom:16px}
+     .video-box{margin-bottom:16px}
+     .counter{height:30px}` +
+    (variant === 'hidden' ? '.box-slot iframe { display: none !important; }' : ''),
+    `<div class="layout">
+       <main class="feed">
+         <article class="news"><h2>Во дворе поставили новые качели</h2><p>Жители выбрали проект на общем собрании.</p></article>
+         <article class="news"><h2>Поликлиника работает по новому графику</h2><p>Приём ведут до девяти вечера.</p></article>
+         ${variant === 'video' ? `<div class="video-box"><iframe src="https://rutube.ru/play/embed/100" width="640" height="360" frameborder="0"></iframe></div>` : ''}
+         ${variant === 'counter' ? `<div class="counter"><iframe src="https://mc.yandex.ru/metrika/watch" width="1" height="1" style="display:none"></iframe></div>` : ''}
+       </main>
+       <aside class="side">
+         <div class="side-card"><h3>Погода</h3><p>Завтра без осадков.</p></div>
+         ${variant === 'visible' || variant === 'hidden' ? `<div class="box-slot">${SSP_FRAME('ads.betweendigital.com')}</div>` : ''}
+         ${variant === 'visible2' ? `<div class="box-slot">${SSP_FRAME('otm-r.com')}</div>` : ''}
+         <div class="side-card"><h3>Афиша</h3><p>В субботу — концерт в парке.</p></div>
+       </aside>
+     </div>`);
+
+// Метки нативной рекламы российских изданий («На правах рекламы»,
+// «Партнёрский контент») и маркировка без метки — со ссылкой учёта.
+// Ловушка — заметка о маркировке со ссылкой на свой сайт.
+const nativeCard = kind => {
+    const link = '<a href="https://yabs.yandex.ru/count/Example1">Оформить</a>';
+    if (kind === 'marking') {
+        return `<div class="news-card" id="native"><h3>Ипотека от 5%</h3><p>Одобрение за день.</p><a href="https://bank.example.com/ipoteka?erid=2VtzqwMARK01">Подробнее</a><p class="legal">Рекламодатель ООО «Банк Пример», ИНН 7700000003, erid: 2VtzqwMARK01</p></div>`;
+    }
+    return `<div class="news-card" id="native"><span class="tag">${kind}</span><h3>Кредит наличными</h3><p>Оформите онлайн за 5 минут.</p>${link}</div>`;
+};
+const nativeLabels = kind => () => page('Новости города',
+    `body{margin:0;font:15px Arial,sans-serif;color:#222}
+     .news-grid{display:grid;grid-template-columns:repeat(3,300px);gap:16px;width:932px;margin:24px auto}
+     .news-card{border:1px solid #ddd;border-radius:8px;padding:12px;min-height:160px}
+     .tag{display:inline-block;padding:1px 6px;background:#eee;border-radius:4px;font-size:12px}
+     .legal{font-size:10px;color:#888}`,
+    `<div class="news-grid" id="news">
+       <div class="news-card"><h3>В городе открыли новый каток</h3><p>Каток будет работать до марта.</p></div>
+       <div class="news-card"><h3>Расписание электричек изменится</h3><p>С понедельника — новые часы.</p></div>
+       ${kind === 'trap'
+        ? `<div class="news-card" id="note"><h3>Что такое маркировка</h3><p class="legal">Рекламодатель ООО «Ромашка», ИНН 7700000000, erid: 2VtzqvABCde — так выглядит строка.</p><a href="/zakon/markirovka">Подробнее</a></div>`
+        : nativeCard(kind)}
+       <div class="news-card"><h3>Ярмарка в субботу</h3><p>На набережной — фермерские продукты.</p></div>
+       <div class="news-card"><h3>Ремонт моста</h3><p>Движение ограничат на две недели.</p></div>
+       <div class="news-card"><h3>Погода на неделю</h3><p>Ожидается похолодание.</p></div>
+     </div>`);
+
 // Рекламная запись — article (11.10, klerk: правая панель карточек
 // партнёров; ленты с рекламными постами). Прячем по сильному
 // доказательству: два независимых признака и ссылки к рекламодателю.
@@ -544,6 +644,16 @@ const placePage = variant => () => page('Портал для бухгалтер�
          <a href="/img/settings-full.png"><img src="${PIXEL}" width="600" height="300" alt="Настройки браузера"></a>
          <p>Нажмите кнопку ниже, чтобы открыть пошаговую инструкцию.</p><button>Отключить рекламу</button></div>` : ''}
      </div>`);
+
+// Полоса прилипает к верху, а шапка и колонка прилипают со сдвигом на её
+// высоту (klerk, 12.10, вживую: спрятали полосу — меню «повисло» на 100 px,
+// текст уходит под него). Спрятав полосу, их надо поднять.
+const stickyStrip = () => placePage('strip')()
+    .replace('</style>', `.pre{position:sticky;top:0;z-index:5}
+     .site-head{position:sticky;top:90px;z-index:4;box-sizing:border-box;height:56px;background:#fff}
+     .side{position:sticky;top:146px;float:left;width:200px;height:calc(100vh - 146px);margin-left:16px;background:#f3f3f3}
+     .wrap{min-height:3000px}</style>`)
+    .replace('<div class="wrap">', '<aside class="side"><a href="/news/">Новости</a><br><a href="/forum/">Форум</a></aside><div class="wrap">');
 
 const shop = () => page('Каталог — магазин',
     `body{margin:0;font:14px Arial,sans-serif}
@@ -623,6 +733,92 @@ const emptiedLater = async () => page('Главная',
      </div>
      <script>addEventListener('load', () => setTimeout(() => document.querySelector('.promo-box img').remove(), 2000));</script>`);
 
+// Узел ленты, где была реклама, страница отдаёт под обычную запись (8а):
+// виртуальные ленты и выдачи без перезагрузки переиспользуют узлы, а
+// спрятанный узел так и остался бы спрятанным — вместе с записью.
+//   replace — содержимое пункта заменено целиком;
+//   text    — та же разметка, поменялись только текст и адреса (так
+//             обновляет узлы React: правка текста и атрибутов, без
+//             добавления узлов);
+//   twostep — рекламу вынули, запись пришла позже;
+//   rotate  — ловушка: крутящийся баннер, новое объявление с теми же
+//             следами — не показывать ни на миг;
+//   frame   — ловушка: баннер-фрейм сети сменился другим фреймом.
+const REUSE_IMG = 'data:image/gif;base64,R0lGODlhAQABAIAAAP///wAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==';
+const reuseAd = (title, token) => `<div class="card"><span class="card__label">Реклама</span><a class="card__link" href="https://an.yandex.ru/count/${token}"><img alt="" width="560" height="160" src="${REUSE_IMG}"><span class="card__title">${title}</span></a></div>`;
+const reusePost = text => `<div class="post"><a class="post__link" href="/news/${text.length}">${text}</a><p class="post__text">Подробности — в нашем материале.</p></div>`;
+const reused = variant => () => {
+    const frame = src => `<div class="banner"><iframe src="${src}" width="560" height="160" style="border:0"></iframe></div>`;
+    const ad = variant === 'frame' ? frame('https://an.yandex.ru/meta/101?imp=1') : reuseAd('Диваны со скидкой до 50%', 'AAAA1111');
+    const change = {
+        replace: `slot.innerHTML = ${JSON.stringify(reusePost('Пост на месте рекламы: открылась библиотека.'))};`,
+        text: `slot.querySelector('.card__label').firstChild.nodeValue = 'Новости';
+               slot.querySelector('.card__title').firstChild.nodeValue = 'Пост на месте рекламы: открылась библиотека.';
+               slot.querySelector('.card__link').setAttribute('href', '/news/42');
+               slot.querySelector('img').setAttribute('src', ${JSON.stringify(REUSE_IMG + '#2')});`,
+        twostep: `slot.innerHTML = '';
+                  setTimeout(() => { slot.innerHTML = ${JSON.stringify(reusePost('Пост на месте рекламы: открылась библиотека.'))}; }, 700);`,
+        rotate: `slot.innerHTML = ${JSON.stringify(reuseAd('Кухни на заказ за 30 дней', 'BBBB2222'))};`,
+        frame: `slot.innerHTML = ${JSON.stringify(frame('https://an.yandex.ru/meta/202?imp=2'))};`
+    }[variant];
+    const trap = variant === 'rotate' || variant === 'frame';
+    return page('Лента',
+        `body{margin:0;font:14px Arial,sans-serif}
+         .feed{width:600px;margin:16px auto;display:flex;flex-direction:column;gap:12px}
+         .item{min-height:80px;background:#f4f4f4;padding:8px}
+         .card__label{display:block;font-size:11px;color:#888}
+         .card__link,.post__link{display:block;color:#000}`,
+        `<div class="feed" id="feed">
+           <div class="item">${reusePost('Первый пост: расписание электричек изменится.')}</div>
+           <div class="item" id="slot">${ad}</div>
+           <div class="item">${reusePost('Третий пост: в парке высадили клёны.')}</div>
+           <div class="item">${reusePost('Четвёртый пост: ярмарка в субботу.')}</div>
+         </div>
+         <script>
+           addEventListener('load', () => setTimeout(() => {
+             const slot = document.getElementById('slot');
+             ${change}
+             ${trap ? `// Ловушка: новое объявление не показалось ни на миг.
+             window.__glitches = [];
+             for (let t = 100; t <= 1400; t += 100) setTimeout(() => {
+               if (slot.checkVisibility() && slot.getBoundingClientRect().height > 0) window.__glitches.push('баннер виден через ' + t + ' мс');
+             }, t);` : ''}
+           }, 1000));
+         </script>`);
+};
+
+// Всплывающий баннер у края экрана: креатив спрятал движок или сосед, а
+// обёртка с кнопкой «закрыть» осталась висеть поверх страницы (klerk,
+// обход 12.10: баннер Ozon спрятан, «×» на месте). Кнопка закрытия —
+// часть рекламного места, не содержимое.
+//   img  — значок картинкой в блоке с «close» в имени;  word — «Закрыть»
+//          (крестик строкой или значком до 20 px и так не содержимое);
+//   notice — ловушка: своё уведомление сайта с кнопкой «Закрыть» и
+//            скриптом рекламной сети рядом — не трогать.
+const floatingClose = variant => () => {
+    const close = {
+        img: `<div class="float__close banner-close"><img alt="" width="28" height="28" src="${REUSE_IMG}"></div>`,
+        word: '<button class="float__close" type="button">Закрыть</button>',
+        notice: '<button class="float__close" type="button">Закрыть</button>'
+    }[variant];
+    const inner = variant === 'notice'
+        ? '<p class="float__text">Мы обновили раздел «Документы»: теперь шаблоны можно скачать одним архивом.</p><script src="https://an.yandex.ru/system/context.js"></script>'
+        : '<div class="float__ad"><iframe src="https://an.yandex.ru/meta/777?imp=1" width="256" height="160" style="border:0"></iframe></div>';
+    return page('Бухгалтерия: новости',
+        `body{margin:0;font:15px Arial,sans-serif;color:#222}
+         .col{width:700px;margin:24px auto}
+         .news{padding:16px;margin-bottom:16px;border:1px solid #ddd;min-height:200px}
+         .float{position:fixed;left:300px;bottom:30px;width:260px;min-height:170px;background:#fff;box-shadow:0 2px 8px #0003;z-index:10}
+         .float__close{position:absolute;left:4px;top:70px;border:0;background:#fff;border-radius:50%;padding:2px}
+         .float__text{margin:40px 12px 12px}` +
+        (variant === 'notice' ? '' : '.float__ad { display: none !important; }'),
+        `<div class="col">
+           <article class="news"><h2>Пособия в ноябре придут раньше</h2><p>Выплаты перенесли из-за праздника.</p></article>
+           <article class="news"><h2>Новый срок сдачи отчётности</h2><p>Изменения вступят в силу с января.</p></article>
+         </div>
+         <div class="float">${inner}${close}</div>`);
+};
+
 // Почта (mail.ru, 08.10): в списке писем пропали все письма. Реклама в
 // списке приходит не всегда, и её строка бывает пустой, спрятанной
 // движком или вовсе одним скриптом. Механизм не должен принять за слот
@@ -679,8 +875,38 @@ const CASES = [
         slot: '#search-result > li:has(.OrganicTitle-Link[href*="_sttc"])', content: ['#search-result > li:not(:has([href*="_sttc"]))'] },
     { id: 'Яндекс.Поиск: реклама пришла после загрузки', url: 'https://yandex.ru/search/?text=late', html: yandexLate,
         slot: '#search-result > li:has(.OrganicTitle-Link[href*="_sttc"])', content: ['#search-result > li:not(:has([href*="_sttc"]))'] },
+    // report16 (12.10): метка «Промо» в строке адреса — прятать весь пункт,
+    // а не строку с меткой (иначе реклама остаётся без пометки).
+    ...[
+        ['пункт однотипный с выдачей', {}],
+        ['у пункта рекламы свой класс', { own: true }],
+        ['без быстрых ссылок', { sitelinks: false }],
+        ['свой класс, без быстрых ссылок', { own: true, sitelinks: false }],
+        ['реклама пришла после загрузки', { later: true }],
+        ['пункт собирается по частям', { parts: true }]
+    ].map(([name, opts], i) => ({
+        id: `Яндекс.Поиск: «Промо» в строке адреса — ${name}`, url: `https://ya.ru/search/?text=planner${i}`, html: () => yandexPromoSubtitle(opts),
+        slot: '#search-result > li:has(.OrganicTitle-Link[href*="_sttc"])',
+        content: ['#search-result > li:not(:has([href*="_sttc"]))', '#search-result > li:not(:has([href*="_sttc"])) .Organic-Subtitle']
+    })),
+    { id: 'Яндекс.Поиск: выдача без рекламы — строки адреса на месте', url: 'https://ya.ru/search/?text=planner-clean', html: () => yandexPromoSubtitle({ ad: false }),
+        content: ['#search-result > li', '#search-result .Organic-Subtitle', '#search-result .Sitelinks'] },
     { id: 'лента меняется рядом со спрятанным блоком', url: 'https://feed.example.ru/', html: shifting, ads: ['.ad-slot'], content: ['.post'] },
     { id: 'пустой блок после того, как рекламу вынули', url: 'https://portal.example.ru/', html: emptiedLater, afterOther: false, slot: '.promo-box', content: ['.news'] },
+    // 8а: спрятанный пункт ленты отдан под запись — запись видна.
+    ...[
+        ['содержимое заменено', 'replace'],
+        ['поменялись только текст и адреса', 'text'],
+        ['реклама вынута, запись пришла позже', 'twostep']
+    ].map(([name, variant]) => ({ id: `лента: пункт с рекламой отдан под запись — ${name}`, url: `https://feed.example.ru/reuse-${variant}`, html: reused(variant), content: ['.post', '.item'] })),
+    // Обход 12.10 (klerk): после рекламы осталась кнопка «×».
+    ...[['значок картинкой', 'img'], ['кнопка «Закрыть»', 'word']].map(([name, variant]) => ({
+        id: `всплывающий баннер спрятан соседом — не осталось кнопки закрытия (${name})`, url: `https://buh.example.ru/float-${variant}`,
+        html: floatingClose(variant), afterOther: true, slot: '.float', content: ['.news']
+    })),
+    { id: 'контроль: уведомление сайта с кнопкой «Закрыть»', url: 'https://buh.example.ru/float-notice', html: floatingClose('notice'), control: true },
+    { id: 'лента: крутящийся баннер — новое объявление спрятано сразу', url: 'https://feed.example.ru/reuse-rotate', html: reused('rotate'), slot: '#slot', content: ['.post'] },
+    { id: 'лента: баннер-фрейм сети сменился — спрятан сразу', url: 'https://feed.example.ru/reuse-frame', html: reused('frame'), slot: '#slot', content: ['.post'] },
     // Пропуски 08–09.10 (R10): Яндекс — исправлены на этапе 4 (номер блока,
     // теневой DOM); VK — ждёт этапа 6 (todo, см. «прогон»).
     { id: 'Яндекс Видео: «Алиса AI» в списке роликов', url: 'https://yandex.ru/video/search?text=avito', html: yandexVideo,
@@ -726,6 +952,22 @@ const CASES = [
     { id: 'списки: фрейм рекламного сервера', url: 'https://news.example.ru/lists-frame', html: listNews('frame'),
         slot: '.box-slot', content: ['.news', '.side-card'] },
     { id: 'контроль: списки — ссылка на рекламный сервер внутри абзаца', url: 'https://news.example.ru/lists-trap', html: listNews('trap'), control: true },
+    // Аудит 13.10: фреймы бирж из сетевых правил движка.
+    { id: 'списки: фрейм рекламной биржи (betweendigital)', url: 'https://rayon.example.ru/ssp-1', html: sspPage('visible'),
+        slot: '.box-slot', content: ['.news', '.side-card'] },
+    { id: 'списки: фрейм рекламной биржи (otm-r)', url: 'https://rayon.example.ru/ssp-2', html: sspPage('visible2'),
+        slot: '.box-slot', content: ['.news', '.side-card'] },
+    { id: 'списки: сосед спрятал фрейм биржи — осталась рамка', url: 'https://rayon.example.ru/ssp-3', html: sspPage('hidden'), afterOther: true,
+        slot: '.box-slot', content: ['.news', '.side-card'] },
+    { id: 'контроль: плеер видео во фрейме', url: 'https://rayon.example.ru/ssp-video', html: sspPage('video'), control: true },
+    { id: 'контроль: счётчик во фрейме 1×1', url: 'https://rayon.example.ru/ssp-counter', html: sspPage('counter'), control: true },
+    { id: 'нативная реклама: метка «На правах рекламы»', url: 'https://city.example.ru/news-1', html: nativeLabels('На правах рекламы'),
+        slot: '#native', content: ['.news-card:not(#native)'] },
+    { id: 'нативная реклама: метка «Партнёрский контент»', url: 'https://city.example.ru/news-2', html: nativeLabels('Партнёрский контент'),
+        slot: '#native', content: ['.news-card:not(#native)'] },
+    { id: 'нативная реклама: маркировка без метки и ссылка учёта', url: 'https://city.example.ru/news-3', html: nativeLabels('marking'),
+        slot: '#native', content: ['.news-card:not(#native)'] },
+    { id: 'контроль: строка маркировки в заметке со ссылкой на свой сайт', url: 'https://city.example.ru/news-4', html: nativeLabels('trap'), control: true },
     // Пропуск 10.10 (klerk, report11): карточки — article, предохранитель
     // не давал спрятать панель.
     { id: 'записи: панель карточек партнёров с меткой', url: 'https://news.example.ru/records-panel', html: recordsPage('panel'),
@@ -738,6 +980,8 @@ const CASES = [
     // кнопкой «Отключить рекламу».
     { id: 'подпись места: полоса над шапкой с кнопкой «Отключить рекламу»', url: 'https://portal.example.ru/place-strip', html: placePage('strip'),
         slot: '.pre', content: ['.site-head', '.news'] },
+    { id: 'подпись места: полоса прилипает, шапка и колонка — под ней', url: 'https://portal.example.ru/place-sticky', html: stickyStrip,
+        slot: '.pre', content: ['.site-head', '.news', '.side'], pinned: [['.site-head', 0], ['.side', 56]], pinnedToBottom: [['.side']] },
     { id: 'контроль: подпись места — страница подписки', url: 'https://portal.example.ru/place-subscribe', html: placePage('subscribe'), control: true },
     { id: 'контроль: подпись места — меню профиля', url: 'https://portal.example.ru/place-menu', html: placePage('menu'), control: true },
     { id: 'контроль: подпись места — статья «Как отключить рекламу»', url: 'https://portal.example.ru/place-howto', html: placePage('howto'), control: true },
@@ -962,6 +1206,23 @@ try {
                 спрятали: ((now.report && now.report.items) || []).map(i => `${i.reason} ${i.score} [${i.signals}] ${i.tag}.${i.name || ''} ${i.size}`),
                 осталось: now.report && now.report.leftovers && now.report.leftovers.items.map(i => ({ kinds: i.kinds, slot: i.slot }))
             });
+        }
+        if (c.pinned) {
+            // Закреплённые после прокрутки — у верха, без дыры над собой.
+            const tab = await context.newPage();
+            await tab.setViewportSize({ width: 1600, height: 900 });
+            await tab.goto(c.url, { waitUntil: 'load' });
+            await tab.waitForTimeout(SETTLE_MS);
+            await tab.evaluate(() => scrollTo(0, 600));
+            await tab.waitForTimeout(300);
+            const tops = await tab.evaluate(list => list.map(([sel]) => Math.round(document.querySelector(sel).getBoundingClientRect().top)), c.pinned);
+            // Колонка «до низа экрана» и после подъёма доходит до низа.
+            const bottoms = await tab.evaluate(list => list.map(([sel]) => Math.round(innerHeight - document.querySelector(sel).getBoundingClientRect().bottom)), c.pinnedToBottom || []);
+            await tab.close();
+            main(`${c.id}: закреплённые поднялись на место полосы`, c.pinned.every(([, top], i) => Math.abs(tops[i] - top) <= 1), { ждали: c.pinned, стало: tops });
+            if (c.pinnedToBottom) {
+                main(`${c.id}: колонка по-прежнему до низа экрана`, bottoms.every(gap => Math.abs(gap) <= 1), { зазор_снизу: bottoms });
+            }
         }
         if (c.ads) {
             main(`${c.id}: видимой рекламы нет`, now.ads.length === 0, { было: was.ads.length, осталось: now.ads });

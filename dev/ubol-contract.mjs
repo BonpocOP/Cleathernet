@@ -38,7 +38,10 @@ const RULESETS = [
     'annoyances-ai',
     'annoyances-others',
     'easylist',
-    'ublock-filters'
+    'ublock-filters',
+    'adguard-spyware-url',
+    'ublock-badware',
+    'urlhaus-full'
 ];
 
 // Фрагменты кода движка, от которых зависит наше поведение.
@@ -56,7 +59,13 @@ const SOURCE = [
     ['js/mode-manager.js', 'MODE_NONE = 0', 'режим 0 — без фильтрации'],
     // Значок он берёт отсюда — сборка кладёт на это место наши картинки.
     ['js/action.js', "'/img/icon_16_off.png'", 'путь к серому значку'],
-    ['js/action.js', "'/img/icon_16.png'", 'путь к обычному значку']
+    ['js/action.js', "'/img/icon_16.png'", 'путь к обычному значку'],
+    // Блокировка перехода: правила ведут на /strictblock.html (там наша
+    // страница), файл набора грузится, только если счётчик не 0 (сборка
+    // обнуляет его у неопасных наборов).
+    ['js/ruleset-manager.js', "getURL('/strictblock.html')", 'страница блокировки перехода — /strictblock.html'],
+    ['js/ruleset-manager.js', 'Boolean(details.rules.strictblock) === false', 'правила перехода грузятся по счётчику в ruleset-details'],
+    ['js/strictblock.js', "what: 'excludeFromStrictBlock'", 'кнопка «Всё равно открыть» на нашей странице']
 ];
 
 export function checkContract(dir) {

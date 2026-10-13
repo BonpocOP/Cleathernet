@@ -121,8 +121,14 @@ function findLeftovers() {
         }
     }
     for (const el of document.querySelectorAll('iframe[src]')) {
-        if (NETWORK.test(el.src) && seen(el, AD_MIN_AREA)) {
+        if ((NETWORK.test(el.src) && seen(el, AD_MIN_AREA)) || blockedFrame(el, true)) {
             add(el, 'сеть');
+        }
+    }
+    // Реклама по правилам списков движка, которую мы не спрятали.
+    for (const el of listHits) {
+        if (el.isConnected && listCreative(el)) {
+            add(el, 'список');
         }
     }
     // Маркировка: текст с «Рекламодатель» или erid — в своём небольшом блоке.
@@ -313,6 +319,8 @@ function selfCheckReport() {
         active,
         mainText: main ? proseOf(main) : 0,
         hidden,
+        // Спрятанные слоты, отданные страницей под другое и открытые (8а).
+        revealed: revealedCount,
         leftovers: {
             count: left.count,
             likely: left.likely,

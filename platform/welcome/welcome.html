@@ -5,27 +5,33 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Cleathernet установлен</title>
 <link rel="stylesheet" href="welcome.css">
+<link rel="stylesheet" href="../settings/settings.css">
 </head>
 <body>
 <main class="page">
     <header class="hero">
         <img class="hero__icon" src="../icons/icon128.png" alt="" width="64" height="64">
         <div>
-            <h1 class="hero__title">Cleathernet установлен и уже работает</h1>
-            <p class="hero__lead">Настраивать ничего не нужно: всё включено.</p>
+            <h1 class="hero__title">Cleathernet установлен — всё уже настроено под вас</h1>
+            <p class="hero__lead">Мы включили всё, что нужно почти всем, — думать и настраивать
+                ничего не нужно. Если вам что-то нужно иначе, ниже всё видно и меняется
+                одним щелчком; позже — в <a href="../settings/settings.html">настройках</a>.</p>
         </div>
     </header>
 
     <section class="card">
         <h2>Что он делает</h2>
         <ul>
-            <li>Убирает рекламу на всех сайтах, а заодно назойливые
-                уведомления о cookie и всплывающие окна.</li>
-            <li>На Яндекс.Играх закрывает рекламные окна и растягивает игру на
-                место баннеров.</li>
-            <li>Авито и Яндекс — в работе: реклама там хитрее, дочищаем её отдельно.</li>
+            <li>Убирает рекламу на всех сайтах вместе с пустым местом под неё.</li>
+            <li>Не даёт следить за вами счётчикам, трекерам и рекламным функциям браузера.</li>
+            <li>Предупреждает перед переходом на опасный сайт — с вирусами или мошенниками.</li>
+            <li>На Яндекс.Играх закрывает рекламные окна и растягивает игру на место баннеров.</li>
         </ul>
     </section>
+
+    <p class="setup" id="setup" role="status">Настраиваю фильтры…</p>
+
+    <div id="features"></div>
 
     <section class="card">
         <h2>Закрепите значок</h2>
@@ -46,11 +52,10 @@
         <p>Никакой телеметрии. Расширение обращается только к GitHub —
             узнать, не вышла ли новая версия.</p>
         <p>Движок фильтров — <a href="https://github.com/uBlockOrigin/uBOL-home" target="_blank" rel="noopener">uBO Lite</a>
-            (GPLv3) со списками EasyList, EasyPrivacy, RU AdList и другими.
-            Что ещё можно убрать — в <a href="../settings/settings.html">настройках</a>.</p>
+            (GPLv3) со списками EasyList, EasyPrivacy, RU AdList и другими.</p>
     </section>
 
-    <p class="setup" id="setup" role="status">Настраиваю фильтры…</p>
+    <p class="setup" id="status" role="status"></p>
 </main>
 <script type="module" src="welcome.js"></script>
 </body>

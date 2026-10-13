@@ -264,7 +264,9 @@ function mergeManifest(theirs, mine, modules) {
             // Наши модули (общий механизм и др.) — из их module.json.
             ...moduleScripts(modules, mine)
         ],
-        permissions: union(theirs.permissions, mine.permissions),
+        // privacy — рекламные функции браузера (features.json, type:
+        // privacy). Только в сборке: корневой манифест — слой Игр.
+        permissions: union(theirs.permissions, mine.permissions, ['privacy']),
         // <all_urls> у uBO Lite покрывает наши адреса — без дублей.
         host_permissions: (theirs.host_permissions || []).includes('<all_urls>')
             ? ['<all_urls>']
@@ -315,7 +317,8 @@ for (const file of files) {
 // module.json — описания для сборки, расширению они не нужны.
 fs.cpSync(path.join(ROOT, 'platform'), path.join(OUT, OURS, 'platform'), {
     recursive: true,
-    filter: source => path.relative(path.join(ROOT, 'platform'), source) !== 'generic' && path.basename(source) !== 'module.json'
+    // strictblock.html идёт в корень, на место страницы движка (ниже).
+    filter: source => path.relative(path.join(ROOT, 'platform'), source) !== 'generic' && !['module.json', 'strictblock.html'].includes(path.basename(source))
 });
 // Признаки из списков движка (dev/list-signs.mjs) — в собранный бандл
 // общего механизма: данные всегда от той версии движка, что в сборке.
@@ -337,6 +340,59 @@ for (const size of [16, 32, 64, 128]) {
     }
 }
 fs.copyFileSync(path.join(ROOT, 'platform', 'icons', 'icon512.png'), path.join(OUT, 'img', 'icon_512.png'));
+
+// Блокировка перехода (решение 13.10). Движок открывает вместо сайта свою
+// страницу «предотвратил загрузку», если адрес есть в правилах
+// rulesets/strictblock/<набор>.json любого включённого набора. У рекламных
+// наборов это ловит и переход, который человек сделал сам (ссылка bit.ly
+// на кабинет рекламной сети), — останавливаем только опасные сайты:
+// группа malware движка (вирусы, фишинг) и pol-3 (предупреждения CERT.PL).
+// У остальных правила перехода пустые, а счётчик в ruleset-details — 0:
+// по нему движок решает, загружать ли файл. Минус принят: всплывающие
+// вкладки на рекламные адреса (пиратские кинотеатры) тоже откроются.
+// Код движка не меняем — только его данные и страницу.
+{
+    const DANGEROUS = new Set(['pol-3']);
+    const detailsFile = path.join(OUT, 'rulesets', 'ruleset-details.json');
+    const details = JSON.parse(fs.readFileSync(detailsFile, 'utf8'));
+    const kept = [];
+    for (const ruleset of details) {
+        if (!ruleset.rules || !ruleset.rules.strictblock) {
+            continue;
+        }
+        if (ruleset.group === 'malware' || DANGEROUS.has(ruleset.id)) {
+            kept.push(ruleset.id);
+            continue;
+        }
+        const file = path.join(OUT, 'rulesets', 'strictblock', `${ruleset.id}.json`);
+        if (!fs.existsSync(file)) {
+            throw new Error(`Нет ${path.relative(OUT, file)} — проверьте, где движок теперь держит правила перехода`);
+        }
+        fs.writeFileSync(file, '[]\n');
+        ruleset.rules.strictblock = 0;
+    }
+    for (const id of ['ublock-badware', 'urlhaus-full']) {
+        if (!kept.includes(id)) {
+            throw new Error(`Набор ${id} больше не в группе malware или без правил перехода — опасные сайты перестанут останавливаться`);
+        }
+    }
+    fs.writeFileSync(detailsFile, JSON.stringify(details, null, 1) + '\n');
+
+    // Страница — наша (platform/strictblock), логика — его js/strictblock.js:
+    // всё, что его скрипт ищет по id, должно быть на нашей странице.
+    const page = fs.readFileSync(path.join(ROOT, 'platform', 'strictblock', 'strictblock.html'), 'utf8');
+    const script = fs.readFileSync(path.join(OUT, 'js', 'strictblock.js'), 'utf8');
+    const wanted = new Set([...script.matchAll(/['"`][^'"`]*?#([A-Za-z][\w-]*)/g)].map(match => match[1]));
+    const missing = [...wanted].filter(id => !page.includes(`id="${id}"`));
+    if (wanted.size === 0 || missing.length) {
+        throw new Error(`js/strictblock.js движка ищет то, чего нет на platform/strictblock/strictblock.html: ${missing.join(', ') || 'ни одного id — разобрать вручную'}`);
+    }
+    if (!fs.existsSync(path.join(OUT, 'strictblock.html'))) {
+        throw new Error('В uBO Lite нет strictblock.html — проверьте, куда теперь ведут правила перехода');
+    }
+    fs.writeFileSync(path.join(OUT, 'strictblock.html'), page);
+    console.log(`Блокировка перехода — только опасные сайты: ${kept.join(', ')}`);
+}
 
 // Версия движка — для страницы настроек.
 fs.writeFileSync(path.join(OUT, OURS, 'platform', 'engine.json'), JSON.stringify({ name: 'uBO Lite', version: pin.version }) + '\n');
@@ -360,6 +416,8 @@ fs.writeFileSync(path.join(OUT, OURS, 'background.js'), [
     const engineRulesets = new Set(JSON.parse(fs.readFileSync(path.join(OUT, 'rulesets', 'ruleset-details.json'), 'utf8')).map(item => item.id));
     const { STEPS } = await import(pathToFileURL(path.join(ROOT, 'platform', 'setup.js')).href);
     const byDefault = new Set(STEPS.flatMap(step => step.addRulesets || []));
+    const privacyByDefault = new Set(STEPS.flatMap(step => step.privacy || []));
+    const PRIVACY_SETTINGS = new Set(['topicsEnabled', 'fledgeEnabled', 'adMeasurementEnabled', 'hyperlinkAuditingEnabled', 'thirdPartyCookiesAllowed', 'referrersEnabled', 'doNotTrackEnabled', 'protectedContentEnabled', 'relatedWebsiteSetsEnabled']);
     const problems = [];
     const seenIds = new Set();
     for (const section of catalog.sections) {
@@ -368,6 +426,16 @@ fs.writeFileSync(path.join(OUT, OURS, 'background.js'), [
                 problems.push(`${feature.id}: повторяется`);
             }
             seenIds.add(feature.id);
+            if (feature.type === 'privacy') {
+                const unknown = (feature.settings || []).filter(name => !PRIVACY_SETTINGS.has(name));
+                if (!(feature.settings || []).length || unknown.length) {
+                    problems.push(`${feature.id}: настройки браузера не из chrome.privacy.websites: ${unknown.join(', ') || 'пусто'}`);
+                }
+                if (Boolean(feature.default) !== privacyByDefault.has(feature.id)) {
+                    problems.push(`${feature.id}: в каталоге default=${Boolean(feature.default)}, а в шагах setup.js ${privacyByDefault.has(feature.id) ? 'включается' : 'не включается'}`);
+                }
+                continue;
+            }
             if (feature.type !== 'ruleset') {
                 problems.push(`${feature.id}: неизвестный тип ${feature.type}`);
                 continue;

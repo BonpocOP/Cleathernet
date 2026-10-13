@@ -101,7 +101,25 @@ try {
         check('«Раздражители»: включены cookie, всплывашки, уведомления и ИИ-помощники — чаты, соцсети и «прочее» нет',
             ['annoyances-cookies', 'annoyances-overlays', 'annoyances-notifications', 'annoyances-ai'].every(id => setup.rulesets.includes(id)) &&
             !setup.rulesets.some(id => /^annoyances-(social|widgets|others)$/.test(id)) && !setup.rulesets.includes('rus-1'), setup.rulesets);
-        check('шаги настройки записаны', setup.stored && setup.stored.step === 3, setup.stored);
+        check('шаги настройки записаны', setup.stored && setup.stored.step === 4, setup.stored);
+
+        // Страница первого запуска показывает все функции каталога — уже
+        // в том виде, как они включены.
+        await welcome.waitForFunction(() => document.querySelectorAll('#features input[type=checkbox]').length > 0, null, { timeout: 10000 }).catch(() => {});
+        const shown = await welcome.evaluate(async () => {
+            const catalog = await (await fetch(chrome.runtime.getURL('ygab/platform/features.json'))).json();
+            const boxes = Object.fromEntries([...document.querySelectorAll('#features input[data-feature]')].map(box => [box.dataset.feature, box.checked]));
+            const privacy = {};
+            for (const name of ['topicsEnabled', 'fledgeEnabled', 'adMeasurementEnabled', 'hyperlinkAuditingEnabled']) {
+                const setting = chrome.privacy.websites[name];
+                privacy[name] = setting ? (await setting.get({})).value : 'нет';
+            }
+            return { features: catalog.sections.flatMap(section => section.features).map(f => ({ id: f.id, default: Boolean(f.default) })), boxes, privacy };
+        });
+        check('страница первого запуска: все функции каталога видны, отмечены как по умолчанию',
+            shown.features.every(f => f.id in shown.boxes && shown.boxes[f.id] === f.default), shown);
+        check('рекламные функции браузера и отметки о переходах выключены',
+            Object.values(shown.privacy).every(value => value === false || value === 'нет') && shown.privacy.hyperlinkAuditingEnabled === false, shown.privacy);
 
         // Сделанный шаг не повторяется: выбор пользователя не перезаписываем.
         const again = await welcome.evaluate(async () => {
@@ -326,6 +344,66 @@ try {
     }));
     check('настройки: «Включить» возвращает сайт', reEnabled.level === reEnabled.defaultLevel && !(reEnabled.offSites || []).includes('test.example') && reEnabled.empty, reEnabled);
     check('настройки без ошибок в консоли', settingsErrors.length === 0, settingsErrors);
+
+    // Блокировка перехода — только опасные сайты (сборка опустошает правила
+    // перехода у рекламных наборов). Оба адреса подставляются локально:
+    // если правило не сработает, страница всё равно не уйдёт в сеть.
+    {
+        const strictFile = name => fs.readFile(path.join(EXT, 'rulesets', 'strictblock', `${name}.json`), 'utf8').then(JSON.parse);
+        const dangerous = new Set();
+        const dangerousPatterns = new Set();
+        for (const name of ['ublock-badware', 'urlhaus-full', 'pol-3']) {
+            for (const rule of await strictFile(name)) {
+                (rule.condition.requestDomains || []).forEach(host => dangerous.add(host));
+                dangerousPatterns.add(rule.condition.regexFilter);
+            }
+        }
+        const session = await popup.evaluate(() => chrome.declarativeNetRequest.getSessionRules());
+        const strict = session.filter(rule => rule.action.type === 'redirect' && String(rule.action.redirect.regexSubstitution || '').includes('/strictblock.html'));
+        const hosts = strict.flatMap(rule => rule.condition.requestDomains || []);
+        check('блокировка перехода: правила есть, и все — из опасных наборов',
+            hosts.length > 0 && hosts.every(host => dangerous.has(host)) && strict.every(rule => dangerousPatterns.has(rule.condition.regexFilter)), { rules: strict.length, hosts: hosts.length, чужие: hosts.filter(host => !dangerous.has(host)).slice(0, 5) });
+        check('у рекламных наборов правил перехода нет', (await strictFile('easylist')).length === 0 && (await strictFile('ublock-filters')).length === 0, null);
+
+        // a-ads.com — рекламная сеть из правил перехода EasyList.
+        const AD_HOST = 'a-ads.com';
+        const BAD_HOST = [...dangerous].find(host => /^[a-z][a-z0-9-]*\.[a-z]+$/.test(host) && !host.includes('xn--'));
+        const served = [];
+        await context.route(url => [AD_HOST, BAD_HOST].includes(url.hostname), route => {
+            served.push(new URL(route.request().url()).hostname);
+            route.fulfill({ contentType: 'text/html; charset=utf-8', body: '<!doctype html><title>сайт</title><p>сайт открылся</p>' });
+        });
+        const nav = await context.newPage();
+        const navErrors = [];
+        nav.on('pageerror', error => navErrors.push(String(error.message || error)));
+        await nav.goto(`https://${AD_HOST}/campaign`).catch(() => {});
+        check('переход на адрес из рекламных списков не останавливается', nav.url().startsWith(`https://${AD_HOST}/`) && served.includes(AD_HOST), nav.url());
+
+        await nav.goto(`https://${BAD_HOST}/download?file=https://${BAD_HOST}/setup.exe`).catch(() => {});
+        await nav.waitForURL(/strictblock\.html/, { timeout: 5000 }).catch(() => {});
+        await nav.waitForTimeout(800);
+        const page = await nav.evaluate(() => ({
+            title: document.title,
+            url: document.querySelector('#theURL p span').textContent,
+            parsed: !document.getElementById('toggleParse').classList.contains('hidden'),
+            reason: document.getElementById('reason').hidden ? '' : document.getElementById('reason').textContent,
+            buttons: [...document.querySelectorAll('button')].filter(b => b.offsetParent).map(b => b.textContent.trim())
+        })).catch(error => ({ error: String(error) }));
+        check('переход на опасный сайт остановлен нашей страницей',
+            nav.url().includes('/strictblock.html#') && !served.includes(BAD_HOST) && page.title.startsWith('Cleathernet') && page.url.includes(BAD_HOST) && page.reason,
+            { url: nav.url(), page, served });
+        check('страница блокировки: по-русски, разбор адреса, без ошибок',
+            page.buttons && page.buttons.includes('Всё равно открыть') && page.buttons.some(text => text === 'Назад' || text === 'Закрыть вкладку') && page.parsed && navErrors.length === 0,
+            { page, navErrors });
+        if (process.env.STRICTBLOCK_SHOT) {
+            await nav.screenshot({ path: process.env.STRICTBLOCK_SHOT });
+        }
+        await nav.click('#proceed').catch(() => {});
+        await nav.waitForURL(url => url.hostname === BAD_HOST, { timeout: 5000 }).catch(() => {});
+        check('«Всё равно открыть» открывает сайт', new URL(nav.url()).hostname === BAD_HOST && served.includes(BAD_HOST), nav.url());
+        await nav.close();
+        await context.unroute(url => [AD_HOST, BAD_HOST].includes(url.hostname)).catch(() => {});
+    }
 
     // Самопроверка: сама открывает сайт, собирает, что спрятано, — без
     // текста страницы и с укороченным адресом.

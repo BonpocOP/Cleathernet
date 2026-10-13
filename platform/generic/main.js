@@ -39,11 +39,18 @@ function candidates(scope) {
         }
     }
     for (const el of scope.querySelectorAll('iframe[src], script[src]')) {
-        if (NETWORK.test(el.src) && el.parentElement) {
+        if ((NETWORK.test(el.src) || blockedFrame(el)) && el.parentElement) {
             out.add(el.parentElement);
         }
     }
-    for (const el of labelsIn(scope)) {
+    // Метки и маркировка без метки («Рекламодатель …, erid …») — за один
+    // обход текста: маркировку одну decide() не принимает, но со ссылкой
+    // учёта в той же карточке — да, а без кандидата карточку не смотрели.
+    const marking = [];
+    for (const el of labelsIn(scope, false, marking)) {
+        out.add(el);
+    }
+    for (const el of marking) {
         out.add(el);
     }
     // Реклама по правилам списков движка (lists.js).
@@ -102,8 +109,12 @@ function evaluate(list) {
                 decision = checked.has(root) || insideCollapsed(root) ? null : verdict(root);
                 checked.add(root);
             }
-            if (decision) {
-                collapse(root, decision, decision.reason === 'empty' && hiddenAdTrace(root));
+            if (decision && collapse(root, decision, decision.reason === 'empty' && hiddenAdTrace(root)) && decision.reason !== 'empty') {
+                if (Date.now() - (revealedAt.get(root) || -Infinity) < STICKY_MS) {
+                    collapsed.get(root).sticky = true;
+                } else {
+                    watchInside(root);
+                }
             }
             break;
         }
@@ -145,6 +156,8 @@ function flush() {
     refill(nodes);
     const targets = [...removedFrom].filter(t => t.isConnected);
     removedFrom.clear();
+    targets.forEach(noteChange);
+    recheckChanged();
     if (active && targets.length) {
         const affected = [...known].filter(el => el.isConnected && targets.some(t => el.contains(t) || t.contains(el)));
         if (affected.length) {
@@ -194,25 +207,92 @@ function hasContent(root) {
     return false;
 }
 
+// Снять скрытие и посмотреть заново, когда таблица стилей обновится.
+function reveal(root) {
+    uncollapse(root);
+    timers.push(setTimeout(() => {
+        if (active && root.isConnected) {
+            pass(root);
+            evaluate([...known].filter(el => el.isConnected && (root.contains(el) || el.contains(root))));
+        }
+    }, REFILL_RECHECK_MS));
+}
+
+// Слот, спрятанный как реклама, страница может отдать под другое (8а):
+// виртуальные ленты и выдачи без перезагрузки переиспользуют узлы —
+// меняют содержимое целиком или только текст и адреса (так обновляет
+// узлы React). Спрятанный узел остался бы спрятанным вместе с записью.
+// Поэтому изменения внутри такого слота смотрим: рекламный след остался
+// (slots.js, adTraceLeft) — блок спрятан, как был (крутящийся баннер не
+// мигает); следов нет — реклама ушла, скрытие снимаем. Снова спрятан
+// вскоре после этого — разметка и вид расходятся (реклама без следов в
+// разметке): такой слот больше не открываем, иначе он мигал бы с каждой
+// сменой объявления.
+const changedSlots = new Set();
+const revealedAt = new WeakMap();
+const STICKY_MS = 5000;
+let revealedCount = 0;
+
+// Правку текста и адресов наблюдатель всей страницы (только добавленные
+// узлы) не видит — её слушаем лишь внутри спрятанных нами слотов.
+let insideObserver = null;
+
+function watchInside(root) {
+    if (!insideObserver) {
+        insideObserver = new MutationObserver(records => {
+            if (orphaned()) {
+                return;
+            }
+            for (const record of records) {
+                noteChange(record.target.nodeType === 1 ? record.target : record.target.parentElement);
+            }
+            if (changedSlots.size && !batchTimer) {
+                batchTimer = setTimeout(flush, 200);
+            }
+        });
+    }
+    insideObserver.observe(root, { subtree: true, characterData: true, attributes: true, attributeFilter: ['href', 'src'] });
+}
+
+function noteChange(node) {
+    const root = node && node.isConnected && collapsedAbove(node);
+    const entry = root && collapsed.get(root);
+    if (entry && !entry.empty && !entry.sticky) {
+        changedSlots.add(root);
+    }
+}
+
+function recheckChanged() {
+    const roots = [...changedSlots];
+    changedSlots.clear();
+    for (const root of roots) {
+        const entry = collapsed.get(root);
+        if (!entry || entry.sticky || !root.isConnected || adTraceLeft(root)) {
+            continue;
+        }
+        revealedAt.set(root, Date.now());
+        revealedCount += 1;
+        reveal(root);
+    }
+}
+
 function refill(nodes) {
     const roots = new Set();
     for (const node of nodes) {
-        const root = node.isConnected && emptyCollapsedAbove(node);
-        if (root) {
+        const root = node.isConnected && collapsedAbove(node);
+        if (!root) {
+            continue;
+        }
+        if (collapsed.get(root).empty) {
             roots.add(root);
+        } else {
+            noteChange(node);
         }
     }
     for (const root of roots) {
-        if (!hasContent(root)) {
-            continue;
+        if (hasContent(root)) {
+            reveal(root);
         }
-        uncollapse(root);
-        timers.push(setTimeout(() => {
-            if (active && root.isConnected) {
-                pass(root);
-                evaluate([...known].filter(el => el.isConnected && (root.contains(el) || el.contains(root))));
-            }
-        }, REFILL_RECHECK_MS));
     }
 }
 
@@ -287,6 +367,11 @@ function stop() {
         observer.disconnect();
         observer = null;
     }
+    if (insideObserver) {
+        insideObserver.disconnect();
+        insideObserver = null;
+    }
+    changedSlots.clear();
     clearTimeout(batchTimer);
     batchTimer = null;
     pending.clear();
@@ -333,6 +418,8 @@ try {
                 collapsed: collapsed.size,
                 afterOther: collapseLog.filter(item => item.afterOther).length,
                 hiddenBy: cssBroken ? 'inline' : 'user-css',
+                // Сколько спрятанных слотов страница отдала под другое (8а).
+                revealed: revealedCount,
                 items: collapseLog.slice(),
                 // Что похоже на рекламу, но осталось, и разведка (report.js).
                 leftovers: active ? safely(leftoversReport) : null,

@@ -12,6 +12,8 @@
 // Сообщения движок обрабатывает только после своей инициализации, так что
 // гонки с его первым запуском (выбор наборов по языку браузера) нет.
 
+import { loadCatalog, setPrivacy } from './shared/features-ui.js';
+
 const KEY = 'ygab.setup';
 
 // Экспорт — для сборки: она сверяет шаги с каталогом функций
@@ -43,6 +45,15 @@ export const STEPS = [
         // в списке около десяти. Чаты поддержки, соцсети и «прочее» — нет:
         // там есть заметный минус (features.json).
         addRulesets: ['annoyances-notifications', 'annoyances-ai']
+    },
+    {
+        id: 4,
+        // 13.10: рекламные функции самого браузера (Topics, аукционы
+        // Protected Audience, подсчёт показов) и скрытые отметки о
+        // переходах (<a ping>) — выключить. Сайты от этого не ломаются,
+        // а при удалении расширения браузер вернёт всё сам. Номера —
+        // функции каталога (features.json, type: privacy).
+        privacy: ['browser-ad-apis', 'hyperlink-auditing']
     }
 ];
 
@@ -57,6 +68,18 @@ async function applyStep(step) {
         const wanted = [...new Set(enabled.concat(step.addRulesets))];
         if (wanted.length !== enabled.length) {
             await send({ what: 'applyRulesets', enabledRulesets: wanted });
+        }
+    }
+    if (step.privacy && step.privacy.length) {
+        const catalog = await loadCatalog();
+        const features = catalog.sections.flatMap(section => section.features);
+        for (const id of step.privacy) {
+            const feature = features.find(item => item.id === id);
+            if (feature) {
+                // Настройки нет в этом браузере или её держит политика —
+                // не повод останавливать остальные шаги.
+                await setPrivacy(feature, true).catch(() => {});
+            }
         }
     }
     if (typeof step.autoReload === 'boolean') {
