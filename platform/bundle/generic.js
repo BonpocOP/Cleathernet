@@ -1213,6 +1213,30 @@ function visibleContent(el) {
             return true;
         }
     }
+    return skippedContent(el);
+}
+
+// Содержимое есть, но браузер его не рисует: content-visibility (auto —
+// ниже экрана, hidden — до показа). innerText такого блока пуст, размеров
+// у записей нет — «пустым» он только кажется (hh, 13.10: секция «Похожие
+// вакансии» 770×600 ниже экрана). Узел с текстом в разметке под таким
+// свойством — содержимое. Только когда всё прочее сказало «пусто»; узлов
+// смотрим немного — пустое место мало.
+const SKIPPED_SCAN = 200;
+
+function skippedContent(el) {
+    // Текста нет и в разметке — пусто по-настоящему (почти всегда так):
+    // стили не спрашиваем.
+    if ((el.textContent || '').trim().length <= 2) {
+        return false;
+    }
+    const nodes = [el, ...el.querySelectorAll('*')];
+    for (let i = 0; i < nodes.length && i < SKIPPED_SCAN; i += 1) {
+        const node = nodes[i];
+        if (getComputedStyle(node).contentVisibility !== 'visible' && (node.textContent || '').trim().length > 2) {
+            return true;
+        }
+    }
     return false;
 }
 
@@ -2342,13 +2366,27 @@ function evaluate(list) {
             continue;
         }
         const unit = adUnitFrom(el);
-        for (let root of slotsFrom(unit)) {
+        // Все места отвергнуты (предохранители записи и контента: статья
+        // ленты, высокая колонка новостей), а реклама — пустая рамка
+        // (обход 12.10: gazeta, championat) — прячем саму рамку. Только
+        // пустую: видимое так не теряется, а скрытие снимет содержимое,
+        // пришедшее позже.
+        const slots = slotsFrom(unit);
+        let ownTried = false;
+        for (let root of slots) {
             if (checked.has(root) || insideCollapsed(root)) {
                 break;
             }
             checked.add(root);
             let decision = verdict(root);
             if (!decision) {
+                if (!ownTried && root === slots[slots.length - 1]) {
+                    ownTried = true;
+                    const own = outermostAlone(unit);
+                    if (!slots.includes(own) && !visibleContent(own)) {
+                        slots.push(own);
+                    }
+                }
                 continue;
             }
             // Контейнер с рекламой — не слот (slots.js, mostlyAd). Отказ — от

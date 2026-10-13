@@ -10,7 +10,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 
-const EXT = path.resolve('../build/extension');
+const EXT = path.resolve(process.env.EXT || '../build/extension');
 const pages = [
     ['https://www.avito.ru/moskva/kvartiry/prodam', '../test/fixtures/raw/pages/avito.ru_moskva-kvartiry-prodam.html'],
     ['https://www.avito.ru/', '../test/fixtures/raw/pages/avito.ru.html']

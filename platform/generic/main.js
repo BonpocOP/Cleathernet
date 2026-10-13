@@ -91,13 +91,27 @@ function evaluate(list) {
             continue;
         }
         const unit = adUnitFrom(el);
-        for (let root of slotsFrom(unit)) {
+        // Все места отвергнуты (предохранители записи и контента: статья
+        // ленты, высокая колонка новостей), а реклама — пустая рамка
+        // (обход 12.10: gazeta, championat) — прячем саму рамку. Только
+        // пустую: видимое так не теряется, а скрытие снимет содержимое,
+        // пришедшее позже.
+        const slots = slotsFrom(unit);
+        let ownTried = false;
+        for (let root of slots) {
             if (checked.has(root) || insideCollapsed(root)) {
                 break;
             }
             checked.add(root);
             let decision = verdict(root);
             if (!decision) {
+                if (!ownTried && root === slots[slots.length - 1]) {
+                    ownTried = true;
+                    const own = outermostAlone(unit);
+                    if (!slots.includes(own) && !visibleContent(own)) {
+                        slots.push(own);
+                    }
+                }
                 continue;
             }
             // Контейнер с рекламой — не слот (slots.js, mostlyAd). Отказ — от

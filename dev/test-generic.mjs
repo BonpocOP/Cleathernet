@@ -859,6 +859,66 @@ const mail = variant => () => {
          </div>`);
 };
 
+// Пустое место сети внутри большого блока, который сам — не реклама
+// (обход 12.10): подгруженная статья ленты (gazeta, adfox_btf_mid 300×250)
+// и высокая боковая колонка новостей (championat, adfox_btf_news_sidebar).
+// Блок отвергают предохранители записи и контента — и пустая рамка сети
+// оставалась на странице. Прячется только сама пустая обёртка рекламы.
+//   feed    — статья ленты;  sidebar — колонка новостей выше 2,5 экрана;
+//   late    — реклама пришла в рамку позже: рамку открыли, реклама — как
+//             обычно (видна, потому что её спрячет уже её собственный след);
+//   photo   — ловушка: пустая рамка под фото 300×250 без следов рекламы.
+const emptyNetworkInBlock = variant => () => {
+    const story = (n, extra = '') => `<div class="story _s_added_article"><article><h2 class="story__title">Статья ${n}: в городе обновили трамвайные пути</h2>
+        <p class="story__text">Работы шли всё лето: заменили рельсы, шпалы и контактную сеть. По словам подрядчика, движение станет тише, а поездки — быстрее на несколько минут.</p>
+        ${extra}
+        <p class="story__text">Следующий участок отремонтируют весной. Схема объезда опубликована на <a href="/transport/">странице транспорта</a>.</p></article></div>`;
+    const slot = {
+        feed: `<div class="_sticky"><div id="adfox_btf_mid" style="width:300px;min-height:250px;margin:0 auto"></div></div>`,
+        late: `<div class="_sticky"><div id="adfox_btf_mid" style="width:300px;min-height:250px;margin:0 auto"></div></div>`,
+        photo: `<div class="story__photo" style="width:300px;height:250px;margin:0 auto;background:#fff"></div>`
+    }[variant];
+    if (variant === 'sidebar') {
+        const item = n => `<a class="news__item" href="/news/${n}/">Новость ${n}: теннисист вышел в четвертьфинал турнира</a>`;
+        const block = (n, extra = '') => `<div class="news _in-sidebar"><div class="news__head">Новости ${n}</div>${Array.from({ length: 30 }, (_, i) => item(n * 100 + i)).join('')}${extra}</div>`;
+        return page('Спорт',
+            `body{margin:0;font:14px Arial,sans-serif}
+             .wrap{display:flex;gap:24px;width:1200px;margin:0 auto}
+             .article{flex:1}.sidebar{width:300px}
+             .news{margin-bottom:16px}.news__head{font-weight:bold;height:30px}
+             .news__item{display:block;height:80px;color:#000}
+             .banner-news-sidebar{width:300px;height:250px}`,
+            `<div class="wrap"><div class="article"><h1>Матч четвёртого круга</h1><p class="lead">Онлайн-трансляция: счёт по сетам и ключевые моменты.</p></div>
+             <aside class="sidebar">${block(1, '<div class="banner-news-sidebar js-bp-news-sidebar" id="adfox_btf_news_sidebar"></div>')}${block(2)}${block(3)}</aside></div>`);
+    }
+    return page('Новости',
+        `body{margin:0;font:14px Arial,sans-serif}
+         .feed{width:760px;margin:0 auto}
+         .story{padding:16px 0;border-bottom:1px solid #ddd}`,
+        `<div class="feed">${story(1)}${story(2, slot)}${story(3)}${story(4)}</div>
+         ${variant === 'late' ? `<script>addEventListener('load', () => setTimeout(() => {
+             document.getElementById('adfox_btf_mid').innerHTML = '<a class="adv-link" href="https://an.yandex.ru/count/LATE1"><img alt="" width="300" height="250" src="${REUSE_IMG}"></a>';
+         }, 1500));</script>` : ''}`);
+};
+
+// Ловушка (набор обычных страниц, hh 13.10): секция «Похожие вакансии» с
+// content-visibility: auto ниже экрана — браузер её не рисует, innerText
+// пуст, хотя в разметке полно записей. Рамка сети внутри — повод
+// подняться до самой секции, а «пустой» она только кажется.
+const lazySection = () => page('Вакансия',
+    `body{margin:0;font:14px Arial,sans-serif}
+     .vacancy{width:760px;margin:0 auto}
+     .vacancy__text{height:2600px}
+     .vacancy-section_lazy{content-visibility:auto;contain-intrinsic-size:auto 600px}
+     .card{padding:12px;border:1px solid #ddd;margin-bottom:8px}`,
+    `<div class="vacancy"><h1>Инженер-сметчик</h1><div class="vacancy__text">Обязанности: составление смет, проверка актов выполненных работ, работа с подрядчиками.</div>
+       <div class="vacancy-section vacancy-section_lazy"><h2>Похожие вакансии</h2>
+         <div class="card"><a href="/vacancy/1">Инженер ПТО</a><p>Опыт от года, полный день.</p></div>
+         <div class="card"><a href="/vacancy/2">Сметчик в проектный институт</a><p>Гибкий график.</p></div>
+         <div id="adfox_vacancy_similar"></div>
+         <div class="card"><a href="/vacancy/3">Специалист по ценообразованию</a><p>Удалённо.</p></div>
+       </div></div>`);
+
 const CASES = [
     { id: 'почта: пустая строка рекламы в списке писем', url: 'https://mail.example.ru/inbox/', html: mail('zero'), content: ['.letter', '.toolbar', '.pager'] },
     { id: 'почта: строка рекламы спрятана', url: 'https://mail.example.ru/inbox/hidden', html: mail('hidden'), content: ['.letter', '.toolbar', '.pager'] },
@@ -905,6 +965,13 @@ const CASES = [
         html: floatingClose(variant), afterOther: true, slot: '.float', content: ['.news']
     })),
     { id: 'контроль: уведомление сайта с кнопкой «Закрыть»', url: 'https://buh.example.ru/float-notice', html: floatingClose('notice'), control: true },
+    // Обход 12.10 (gazeta, championat): пустая рамка сети внутри блока,
+    // который отвергли предохранители.
+    { id: 'пустое место сети в статье ленты', url: 'https://news.example.ru/feed', html: emptyNetworkInBlock('feed'), slot: '#adfox_btf_mid', content: ['.story__title', '.story__text'] },
+    { id: 'пустое место сети в высокой колонке новостей', url: 'https://sport.example.ru/match', html: emptyNetworkInBlock('sidebar'), slot: '#adfox_btf_news_sidebar', content: ['.news__item', '.news__head', '.lead'] },
+    { id: 'пустое место сети в статье ленты — реклама пришла позже', url: 'https://news.example.ru/feed-late', html: emptyNetworkInBlock('late'), ads: ['#adfox_btf_mid'], content: ['.story__title', '.story__text'] },
+    { id: 'контроль: пустая рамка под фото в статье ленты', url: 'https://news.example.ru/feed-photo', html: emptyNetworkInBlock('photo'), control: true },
+    { id: 'контроль: ленивая секция ниже экрана (content-visibility) с рамкой сети', url: 'https://jobs.example.ru/vacancy/1', html: lazySection, control: true },
     { id: 'лента: крутящийся баннер — новое объявление спрятано сразу', url: 'https://feed.example.ru/reuse-rotate', html: reused('rotate'), slot: '#slot', content: ['.post'] },
     { id: 'лента: баннер-фрейм сети сменился — спрятан сразу', url: 'https://feed.example.ru/reuse-frame', html: reused('frame'), slot: '#slot', content: ['.post'] },
     // Пропуски 08–09.10 (R10): Яндекс — исправлены на этапе 4 (номер блока,
