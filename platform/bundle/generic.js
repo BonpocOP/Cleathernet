@@ -479,10 +479,41 @@ const sameSite = (a, b) => {
 // под строкой поиска, yandex.ru/search/_sttc/…).
 const NAV_LINK_TEXT = 40;
 
+// Пункт меню — навигация, куда бы ни вёл (14.10, ночной обход: подвал
+// портала, ссылка «Реклама» со страницы auto.* на справку help.* — соседний
+// поддомен; бывает и домен группы компаний). По адресу не понять, своя ли
+// это страница: метка в рекламе тоже ведёт на справку сети о рекламе. Зато
+// понятно по строению: ссылка — весь свой пункт списка, и рядом ещё пункты
+// из одной ссылки. У рекламы в списке в пункте, кроме метки, картинка и
+// заголовок.
+const MENU_MIN_ITEMS = 3;
+const squash = text => (text || '').replace(/\s+/g, ' ').trim();
+const loneLinkItem = li => {
+    const links = li.querySelectorAll('a[href]');
+    return links.length === 1 && squash(li.textContent) === squash(links[0].textContent);
+};
+
+function menuItemLink(link) {
+    const item = link.parentElement;
+    if (!item || item.tagName !== 'LI' || !loneLinkItem(item)) {
+        return false;
+    }
+    let items = 0;
+    for (const li of item.parentElement.children) {
+        if (li.tagName === 'LI' && loneLinkItem(li) && ++items >= MENU_MIN_ITEMS) {
+            return true;
+        }
+    }
+    return false;
+}
+
 const ownPageLink = el => {
     const link = el.closest('a[href]');
-    if (!link || link.matches(TRACKING_LINKS) || (link.textContent || '').replace(/\s+/g, ' ').trim().length > NAV_LINK_TEXT) {
+    if (!link || link.matches(TRACKING_LINKS) || squash(link.textContent).length > NAV_LINK_TEXT) {
         return false;
+    }
+    if (menuItemLink(link)) {
+        return true;
     }
     try {
         return sameSite(new URL(link.href, location.href).hostname, location.hostname);
@@ -1575,15 +1606,28 @@ function adFormat(root) {
 // подвал, карточки сайта ведут на свой. Ссылок немного (одно действие), и
 // чужих — не меньше половины.
 const LEADS_AWAY_MAX_LINKS = 6;
+// Соседние поддомены портала (auto.* → help.*) — тот же сайт, а не
+// рекламодатель (14.10, подвал портала: «Помощь», «О проекте» на help.*).
+// Сайт — два последних уровня, три, если второй — общий (co.uk, com.ru).
+// Только здесь: признак сети (lists.js) ad.mail.ru на news.mail.ru должен
+// по-прежнему считать чужим.
+const SHARED_SECOND_LEVEL = /^(co|com|net|org|gov|edu|ac|msk|spb)$/;
+
+function siteOf(host) {
+    const parts = host.replace(/^www\./, '').split('.');
+    const keep = parts.length > 2 && SHARED_SECOND_LEVEL.test(parts[parts.length - 2]) ? 3 : 2;
+    return parts.slice(-keep).join('.');
+}
 
 function leadsAway(root) {
     const links = [...root.querySelectorAll('a[href]')].filter(a => /^https?:/i.test(a.href));
     if (!links.length || links.length > LEADS_AWAY_MAX_LINKS) {
         return false;
     }
+    const here = siteOf(location.hostname);
     const away = links.filter(a => {
         try {
-            return !sameSite(new URL(a.href).hostname, location.hostname);
+            return siteOf(new URL(a.href).hostname) !== here;
         } catch {
             return false;
         }

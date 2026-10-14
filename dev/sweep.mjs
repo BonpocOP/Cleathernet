@@ -38,7 +38,8 @@
 //             никогда; две подряд — пауза 10 мин; пять за последние 15
 //             адресов — останавливаемся (похоже, адрес IP помечен).
 //   --until ЧЧ:ММ — не начинать новый адрес после этого времени (утро).
-//   --shuffle — сайты в случайном порядке (второй замер скорости).
+//   --shuffle — сайты в случайном порядке.
+//   --recheck <папка> | last — только адреса, где в том обходе пропал текст.
 
 import { chromium } from 'playwright';
 import { browserOptions } from './browser.mjs';
@@ -56,7 +57,7 @@ const args = process.argv.slice(2);
 const arg = name => { const i = args.indexOf(name); return i === -1 ? null : args[i + 1]; };
 const ONLY = arg('--only');
 const LIMIT = Number(arg('--limit')) || 0;
-const DEEP = !args.includes('--no-deep');
+const DEEP = !args.includes('--no-deep') && !args.includes('--recheck');
 const HEADED = args.includes('--headed');
 const RESUME = arg('--resume');
 // Скриншоты и у чистых сайтов — посмотреть глазами.
@@ -95,17 +96,37 @@ async function unfinished() {
     const last = names.find(name => existsSync(path.join(SWEEPS, name, 'results.json')));
     return last && !existsSync(path.join(SWEEPS, last, 'done.txt')) ? path.join(SWEEPS, last) : null;
 }
+// --recheck <папка> | last — второй проход ночи (14.10): только адреса, где в
+// прошлом обходе пропал текст (с нами или с добавочными наборами), — живая
+// лента или стойкая потеря. Остальное повторять незачем: скорость через VPN —
+// шум, а лишние заходы на сайт — риск капчи.
+const RECHECK = arg('--recheck');
+const recheckDir = RECHECK === 'last' ? (existsSync(SWEEPS) ? readdirSync(SWEEPS).sort().reverse().map(name => path.join(SWEEPS, name)).find(dir => existsSync(path.join(dir, 'results.json'))) : null) : RECHECK && path.resolve(RECHECK);
 const OUT = RESUME ? path.resolve(RESUME) : (args.includes('--continue') && await unfinished()) || path.join(SWEEPS, stamp);
 await fs.mkdir(OUT, { recursive: true });
 
 const corpus = JSON.parse(await fs.readFile(path.join(ROOT, 'test', 'ad-sites.json'), 'utf8'));
-let sites = corpus.sites.filter(s => !FORBIDDEN.test(new URL(s.url).hostname)).filter(s => !ONLY || s.url.includes(ONLY));
+let sites = corpus.sites;
+if (RECHECK) {
+    const lost = recheckDir ? JSON.parse(readFileSync(path.join(recheckDir, 'results.json'), 'utf8'))
+        .filter(e => (e.found || []).some(f => f.startsWith('пропало текста')) || e.ab?.textLoss >= 10) : [];
+    console.log(`Перепроверка потери текста: ${lost.length} адресов из ${recheckDir || 'нет прошлого обхода'}`);
+    sites = lost.map(e => ({ url: e.url, category: e.category }));
+}
+sites = sites.filter(s => !FORBIDDEN.test(new URL(s.url).hostname)).filter(s => !ONLY || s.url.includes(ONLY));
 if (LIMIT) sites = sites.slice(0, LIMIT);
 
-const withTimeout = (promise, ms, what) => Promise.race([
-    promise,
-    new Promise((_, reject) => setTimeout(() => reject(new Error(`${what}: дольше ${ms / 1000} с`)), ms))
-]);
+const withTimeout = (promise, ms, what) => {
+    let timer;
+    return Promise.race([
+        promise,
+        new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`${what}: дольше ${ms / 1000} с`)), ms); })
+    ]).finally(() => clearTimeout(timer));
+};
+// Весь адрес (три браузера, прогрев, разбор) — около 47 с (замер 14.10). Дольше 6 мин —
+// зависла вкладка (evaluate и close без срока ждут вечно, 14.10 обход
+// простоял так 12 часов): бросаем адрес и перезапускаем браузеры.
+const SITE_TIMEOUT = Number(process.env.SWEEP_SITE_TIMEOUT) || 6 * 60000;
 
 if (!existsSync(path.join(EXT, 'manifest.json'))) {
     console.log('Нет сборки build/extension — сначала node build.mjs && node build-extension.mjs');
@@ -819,6 +840,23 @@ async function revive() {
     if (plain.gone) { console.log('Браузер «без нас» закрылся — запускаю заново.'); plain = watch(await launch(false)); }
     if (extra?.gone) { console.log('Третий браузер закрылся — запускаю заново.'); extra = watch(await launch(true, AB)); }
 }
+// Зависший браузер закрыть может не выйти — тогда просто бросаем его
+// (умрёт вместе с процессом) и при следующем адресе запускаем новые.
+async function closeAll() {
+    for (const context of [ours, plain, extra]) {
+        if (!context) continue;
+        await withTimeout(context.close(), STEP_TIMEOUT, 'закрыть браузер').catch(() => {});
+        context.gone = true;
+    }
+}
+// Последняя страховка срока: что бы ни повисло, через 15 минут после
+// --until процесс выходит сам.
+if (UNTIL) {
+    setTimeout(() => {
+        console.log('Срок --until прошёл 15 минут назад, а обход не закончился — выхожу принудительно.');
+        process.exit(3);
+    }, Math.max(0, UNTIL - Date.now()) + 15 * 60000).unref();
+}
 if (extra) console.log(`Сравнение: третий браузер с наборами ${AB.join(', ')}`);
 const started = Date.now();
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -832,6 +870,49 @@ if (SHUFFLE) sites.sort(() => Math.random() - 0.5);
 // Очередь: главные страницы, статья — сразу за своей главной; ночью —
 // в конце прохода (тот же сайт не открываем дважды подряд).
 const queue = sites.map(site => ({ site, url: site.url, main: true }));
+// Один адрес во всех браузерах: запись для results.json.
+async function check(site, url, main, q) {
+    // Движок применяет правила сайта со второго захода — сначала прогрев.
+    const w = await visit(ours, url, { warm: true });
+    const a = w.gate ? w : await visit(ours, url, { report: true, explain: true });
+    const b = a.ok ? await visit(plain, url) : null;
+    const gate = a.gate || b?.gate || null;
+    const entry = { url, category: site.category, ok: a.ok, error: a.error };
+    if (gate) entry.gate = gate;
+    if (a.ok) {
+        entry.speed = { ours: a.speed, plain: b?.ok ? b.speed : null };
+        if (extra && !gate) {
+            await visit(extra, url, { warm: true });
+            const c = await visit(extra, url, { explain: true });
+            if (c.ok && a.speed && c.speed) {
+                const oursHosts = new Set(a.speed.blockedHosts.map(([h]) => h));
+                const textLoss = a.text ? Math.round((a.text - c.text) / a.text * 100) : null;
+                // Что добавочные наборы блокируют сверх наших: правило и набор.
+                const oursRules = new Set((a.blocked || []).map(b => b.ruleset + b.filter));
+                entry.ab = {
+                    extraBlocked: c.speed.blocked - a.speed.blocked,
+                    kbDiff: c.speed.kb - a.speed.kb,
+                    textLoss,
+                    hosts: c.speed.blockedHosts.map(([h]) => h).filter(h => !oursHosts.has(h)).slice(0, 8),
+                    rules: [...new Set((c.blocked || []).filter(b => !oursRules.has(b.ruleset + b.filter)).map(b => `${b.ruleset}: ${b.filter}`))].slice(0, 12),
+                    loss: textLoss >= 10 ? explainLoss(c, a) : null
+                };
+            }
+        }
+        entry.found = findings(a, b?.ok ? b : null);
+        // Без расширения не открылся — сравнивать не с чем: не «чисто».
+        if (!b?.ok) entry.plainError = b?.error || 'не открылся';
+        entry.collapsed = a.report?.collapsed ?? null;
+        if (a.loss) entry.loss = a.loss;
+        if (entry.found.length || ALL_SHOTS) entry.files = await save(url, a, b?.ok ? b : null, entry.found);
+        if (main && a.next && !gate) {
+            const article = { site, url: a.next, main: false };
+            if (NIGHT) queue.push(article);
+            else queue.splice(q + 1, 0, article);
+        }
+    }
+    return entry;
+}
 try {
     let n = 0;
     for (let q = 0; q < queue.length; q += 1) {
@@ -843,50 +924,20 @@ try {
         await revive();
         // Человек не открывает сайты без передышки.
         if (NIGHT && q) await sleep(4000 + Math.random() * 8000);
-        // Движок применяет правила сайта со второго захода — сначала прогрев.
-        const w = await visit(ours, url, { warm: true });
-        const a = w.gate ? w : await visit(ours, url, { report: true, explain: true });
-        const b = a.ok ? await visit(plain, url) : null;
-        const gate = a.gate || b?.gate || null;
-        const entry = { url, category: site.category, ok: a.ok, error: a.error };
-        if (gate) entry.gate = gate;
-        if (a.ok) {
-            entry.speed = { ours: a.speed, plain: b?.ok ? b.speed : null };
-            if (extra && !gate) {
-                await visit(extra, url, { warm: true });
-                const c = await visit(extra, url, { explain: true });
-                if (c.ok && a.speed && c.speed) {
-                    const oursHosts = new Set(a.speed.blockedHosts.map(([h]) => h));
-                    const textLoss = a.text ? Math.round((a.text - c.text) / a.text * 100) : null;
-                    // Что добавочные наборы блокируют сверх наших: правило и набор.
-                    const oursRules = new Set((a.blocked || []).map(b => b.ruleset + b.filter));
-                    entry.ab = {
-                        extraBlocked: c.speed.blocked - a.speed.blocked,
-                        kbDiff: c.speed.kb - a.speed.kb,
-                        textLoss,
-                        hosts: c.speed.blockedHosts.map(([h]) => h).filter(h => !oursHosts.has(h)).slice(0, 8),
-                        rules: [...new Set((c.blocked || []).filter(b => !oursRules.has(b.ruleset + b.filter)).map(b => `${b.ruleset}: ${b.filter}`))].slice(0, 12),
-                        loss: textLoss >= 10 ? explainLoss(c, a) : null
-                    };
-                }
-            }
-            entry.found = findings(a, b?.ok ? b : null);
-            // Без расширения не открылся — сравнивать не с чем: не «чисто».
-            if (!b?.ok) entry.plainError = b?.error || 'не открылся';
-            entry.collapsed = a.report?.collapsed ?? null;
-            if (a.loss) entry.loss = a.loss;
-            if (entry.found.length || ALL_SHOTS) entry.files = await save(url, a, b?.ok ? b : null, entry.found);
-            if (main && a.next && !gate) {
-                const article = { site, url: a.next, main: false };
-                if (NIGHT) queue.push(article);
-                else queue.splice(q + 1, 0, article);
-            }
+        let entry;
+        try {
+            entry = await withTimeout(check(site, url, main, q), SITE_TIMEOUT, 'адрес целиком');
+        } catch (e) {
+            entry = { url, category: site.category, ok: false, error: 'завис — ' + e.message };
+            console.log(`${url}: завис больше ${Math.round(SITE_TIMEOUT / 1000)} с — бросаю адрес, перезапускаю браузеры.`);
+            await closeAll();
         }
+        const gate = entry.gate || null;
         results.push(entry);
         done.add(url);
         await fs.writeFile(resultsPath, JSON.stringify(results, null, 1));
         const mins = Math.round((Date.now() - started) / 60000);
-        console.log(`[${n}/${sites.length}, ${mins} мин] ${url}: ${gate ? 'КАПЧА / ЗАЩИТА — ' + gate + ' (сайт пропускаем)' : !a.ok ? 'не открылся — ' + a.error : entry.found.length ? 'НАЙДЕНО: ' + entry.found.join('; ') : entry.plainError ? 'не сравнить — без расширения: ' + entry.plainError : 'чисто'}`);
+        console.log(`[${n}/${sites.length}, ${mins} мин] ${url}: ${gate ? 'КАПЧА / ЗАЩИТА — ' + gate + ' (сайт пропускаем)' : !entry.ok ? 'не открылся — ' + entry.error : entry.found.length ? 'НАЙДЕНО: ' + entry.found.join('; ') : entry.plainError ? 'не сравнить — без расширения: ' + entry.plainError : 'чисто'}`);
         if (main) await writeIndex(results);
         recent.push(Boolean(gate));
         if (recent.length > 15) recent.shift();
@@ -904,9 +955,7 @@ try {
     }
 } finally {
     await writeIndex(results);
-    await ours.close().catch(() => {});
-    await plain.close().catch(() => {});
-    if (extra) await extra.close().catch(() => {});
+    await closeAll();
 }
 if (stopReason) {
     // Не дописан — --continue продолжит.

@@ -460,15 +460,28 @@ function adFormat(root) {
 // подвал, карточки сайта ведут на свой. Ссылок немного (одно действие), и
 // чужих — не меньше половины.
 const LEADS_AWAY_MAX_LINKS = 6;
+// Соседние поддомены портала (auto.* → help.*) — тот же сайт, а не
+// рекламодатель (14.10, подвал портала: «Помощь», «О проекте» на help.*).
+// Сайт — два последних уровня, три, если второй — общий (co.uk, com.ru).
+// Только здесь: признак сети (lists.js) ad.mail.ru на news.mail.ru должен
+// по-прежнему считать чужим.
+const SHARED_SECOND_LEVEL = /^(co|com|net|org|gov|edu|ac|msk|spb)$/;
+
+function siteOf(host) {
+    const parts = host.replace(/^www\./, '').split('.');
+    const keep = parts.length > 2 && SHARED_SECOND_LEVEL.test(parts[parts.length - 2]) ? 3 : 2;
+    return parts.slice(-keep).join('.');
+}
 
 function leadsAway(root) {
     const links = [...root.querySelectorAll('a[href]')].filter(a => /^https?:/i.test(a.href));
     if (!links.length || links.length > LEADS_AWAY_MAX_LINKS) {
         return false;
     }
+    const here = siteOf(location.hostname);
     const away = links.filter(a => {
         try {
-            return !sameSite(new URL(a.href).hostname, location.hostname);
+            return siteOf(new URL(a.href).hostname) !== here;
         } catch {
             return false;
         }

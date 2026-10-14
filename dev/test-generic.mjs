@@ -450,6 +450,39 @@ const hiddenAdLinks = () => page('Городской портал',
      </div>
      <div class="links"><a href="/about/">О нас</a><a class="wide" href="/reklama/">Реклама</a><a href="/contacts/">Контакты</a><span>© 2026 Городской портал</span></div>`);
 
+// Ложное срабатывание 14.10 (ночной обход, подвал портала): пункт меню
+// «Реклама» ведёт не на этот же адрес сайта, а на соседний поддомен
+// (справка портала) или на домен группы компаний — по адресу не понять, своя
+// ли это страница. Подвал внутри обёртки брендирования (`ad_branding_*` —
+// место под фон рекламодателя) — вторым признаком шло имя класса.
+// Вариант 'card' — настоящая реклама в списке ленты: та же ссылка «Реклама»
+// на справку портала, но в пункте ещё картинка и заголовок.
+const portalFooter = variant => page('Калькулятор налога — Портал',
+    `body{margin:0;font:15px Arial,sans-serif;color:#222}
+     .wrap{width:900px;min-height:2400px;margin:24px auto}
+     .calc{padding:24px;background:#123;color:#fff;border-radius:16px}
+     .feed{list-style:none;margin:24px 0;padding:0;display:flex;gap:16px}
+     .feed li{width:280px;border:1px solid #ddd;padding:12px}
+     .feed img{display:block;width:256px;height:144px;background:#cde}
+     .footer{width:100%;height:160px;background:#f4f4f4}
+     .site-footer{width:900px;margin:0 auto;padding:16px 0;color:#666}
+     .site-footer ul{list-style:none;display:flex;flex-wrap:wrap;gap:16px;margin:12px 0 0;padding:0}`,
+    `<div class="ad_branding_site">
+       <div class="wrap"><div class="calc"><h1>Калькулятор транспортного налога</h1><p>Мощность, регион и год — и сумма налога готова.</p></div>
+         <h2>Зачем нужен расчёт</h2><p>Расчёт помогает заранее понять размер платежа и спланировать расходы.</p>` +
+    (variant === 'card'
+        ? `<ul class="feed">
+             <li><a href="/news/1/"><img alt=""><b>Как выбрать шины на зиму</b></a></li>
+             <li class="ad-card"><a href="https://shop.example.com/tires?utm_source=portal"><img alt=""><b>Шины со скидкой до 30%</b></a> <a href="https://help.portal.example.ru/reklama/?about=1">Реклама</a></li>
+             <li><a href="/news/2/"><img alt=""><b>Новые правила техосмотра</b></a></li></ul>`
+        : '') +
+    `  </div>
+       <div class="footer ad_branding_footer"><footer class="site-footer"><span>© Портал — новости, погода, почта и другие сервисы</span>
+         <ul><li><a href="/m/">Мобильная версия</a></li><li><a href="https://help.portal.example.ru/about/">О проекте</a></li>
+           <li><a href="${variant === 'group' ? 'https://portal-group.example.com/advertising/' : 'https://help.portal.example.ru/reklama/?about=1&utm_medium=footer'}">Реклама</a></li>
+           <li><a href="https://help.portal.example.ru/">Помощь</a></li><li><a href="https://portal-group.example.com/jobs/">Вакансии</a></li></ul></footer></div>
+     </div>`);
+
 const blog = () => page('Как работает реклама в интернете — блог',
     `body{margin:0;font:16px Georgia,serif;color:#222}
      .site-header{padding:16px 32px;background:#f5f5f5;box-shadow:0 1px 3px #0002}
@@ -1056,6 +1089,10 @@ const CASES = [
         slot: '#native', content: ['.news-card:not(#native)'] },
     { id: 'контроль: маркировка в новости и ОГРН в подвале', url: 'https://news.example.ru/zakon-o-reklame', html: newsMarking, control: true },
     { id: 'контроль: ссылка «Реклама» спрятана самим сайтом (меню, подвал)', url: 'https://gorod.example.ru/', html: hiddenAdLinks, control: true },
+    { id: 'контроль: подвал портала — пункт «Реклама» на соседний поддомен', url: 'https://auto.portal.example.ru/calc-sub/', html: () => portalFooter('sub'), control: true },
+    { id: 'контроль: подвал портала — пункт «Реклама» на домен группы', url: 'https://auto.portal.example.ru/calc-group/', html: () => portalFooter('group'), control: true },
+    { id: 'подвал портала: карточка с меткой-ссылкой на справку портала', url: 'https://auto.portal.example.ru/calc-card/', html: () => portalFooter('card'),
+        slot: '.ad-card', content: ['.feed li:not(.ad-card)', '.site-footer', '.calc'] },
     { id: 'контроль: пример маркировки отдельным абзацем', url: 'https://notes.example.ru/markirovka', html: markingExample, control: true },
     { id: 'контроль: статья о рекламе', url: 'https://blog.example.ru/reklama-v-internete', html: blog, control: true },
     { id: 'контроль: каталог с догрузкой и промокодом', url: 'https://shop.example.ru/catalog', html: shop, control: true },
